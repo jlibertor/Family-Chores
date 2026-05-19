@@ -31,6 +31,31 @@ button {
   cursor: pointer;
 }
 
+input,
+select,
+textarea {
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--heading);
+  font: inherit;
+  padding: 10px 12px;
+}
+
+textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  color: var(--heading);
+  font-weight: 700;
+}
+
 button:focus-visible {
   outline: 3px solid var(--focus);
   outline-offset: 2px;
@@ -52,6 +77,10 @@ button:focus-visible {
   gap: 20px;
 }
 
+.screen.narrow {
+  max-width: 480px;
+}
+
 .screen-heading {
   display: grid;
   gap: 8px;
@@ -67,9 +96,14 @@ button:focus-visible {
 }
 
 .choice-grid,
-.chores-layout {
+.chores-layout,
+.admin-layout {
   display: grid;
   gap: 16px;
+}
+
+.kiosk-screen {
+  gap: 28px;
 }
 
 .panel,
@@ -133,6 +167,32 @@ button:focus-visible {
   font-weight: 600;
 }
 
+.today-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.today-summary div {
+  display: grid;
+  justify-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 14px 8px;
+}
+
+.today-summary strong {
+  color: var(--heading);
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.today-summary span {
+  color: var(--muted);
+  font-weight: 700;
+}
+
 .confirm-panel {
   justify-items: start;
 }
@@ -162,7 +222,8 @@ button:focus-visible {
   gap: 10px;
 }
 
-.history-item {
+.history-item,
+.read-item {
   display: grid;
   gap: 8px;
   border: 1px solid var(--border);
@@ -183,6 +244,33 @@ button:focus-visible {
   color: var(--muted);
   font-size: 0.92rem;
   font-weight: 600;
+}
+
+.read-list {
+  display: grid;
+  gap: 10px;
+}
+
+.read-item span {
+  color: var(--muted);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.read-item button {
+  justify-self: start;
+  min-height: 40px;
+  padding: 6px 12px;
+}
+
+.check-row {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+}
+
+.check-row input {
+  width: 20px;
+  min-height: 20px;
 }
 
 .notice {
@@ -215,7 +303,17 @@ button:focus-visible {
   }
 
   .choice-grid,
-  .chores-layout {
+  .chores-layout,
+  .admin-layout {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .kiosk-screen .button-grid.large {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .kiosk-screen .button-grid.large button {
+    min-height: 124px;
+    font-size: 1.45rem;
   }
 }

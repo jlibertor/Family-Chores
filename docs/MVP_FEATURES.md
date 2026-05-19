@@ -40,7 +40,7 @@ Implemented foundation:
 
 Goal: make the app usable enough for a real household trial.
 
-Planned features:
+Implemented beta features:
 
 - Parent setup area with simple PIN
 - Manage family members and chores
@@ -49,7 +49,7 @@ Planned features:
 - Basic daily and weekly due or overdue behavior
 - Today view
 - Improved confirmation flow
-- Cloudflare deployment guidance
+- Cloudflare deployment guidance and deploy scripts
 
 ## Deferred Features
 

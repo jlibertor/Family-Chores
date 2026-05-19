@@ -1,13 +1,16 @@
 interface Env {
   DB: D1Database;
+  PARENT_PIN?: string;
 }
 
 type SessionMode = "member" | "kiosk" | "admin";
+type MemberType = "adult" | "child";
+type FrequencyType = "daily" | "weekly" | "as_needed";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "Content-Type",
-  "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, X-Parent-Pin",
+  "Access-Control-Allow-Methods": "GET,POST,PUT,OPTIONS",
 };
 
 const json = (body: unknown, init: ResponseInit = {}) =>
@@ -20,6 +23,7 @@ const json = (body: unknown, init: ResponseInit = {}) =>
   });
 
 const badRequest = (message: string) => json({ ok: false, error: message }, { status: 400 });
+const unauthorized = () => json({ ok: false, error: "Parent PIN is required." }, { status: 401 });
 
 const readJson = async (request: Request) => {
   try {
@@ -34,8 +38,29 @@ const asPositiveInteger = (value: unknown) => {
   return Number.isInteger(numberValue) && numberValue > 0 ? numberValue : null;
 };
 
+const asInteger = (value: unknown, fallback = 0) => {
+  const numberValue = Number(value);
+  return Number.isInteger(numberValue) ? numberValue : fallback;
+};
+
+const asActiveFlag = (value: unknown, fallback = 1) => {
+  if (value === true || value === 1 || value === "1") return 1;
+  if (value === false || value === 0 || value === "0") return 0;
+  return fallback;
+};
+
 const isSessionMode = (value: unknown): value is SessionMode =>
   value === "member" || value === "kiosk" || value === "admin";
+
+const isMemberType = (value: unknown): value is MemberType => value === "adult" || value === "child";
+
+const isFrequencyType = (value: unknown): value is FrequencyType =>
+  value === "daily" || value === "weekly" || value === "as_needed";
+
+const requireParentPin = (request: Request, env: Env) => {
+  const expectedPin = env.PARENT_PIN ?? "1234";
+  return request.headers.get("X-Parent-Pin") === expectedPin;
+};
 
 const getActiveMember = (db: D1Database, id: number) =>
   db
@@ -66,12 +91,12 @@ async function createDeviceSession(
   return result.meta.last_row_id;
 }
 
-async function listMembers(db: D1Database) {
+async function listMembers(db: D1Database, includeInactive = false) {
   const { results } = await db
     .prepare(
       `SELECT id, display_name, member_type, sort_order, active, created_at, updated_at
        FROM family_members
-       WHERE active = 1
+       ${includeInactive ? "" : "WHERE active = 1"}
        ORDER BY sort_order, display_name`,
     )
     .all();
@@ -79,7 +104,7 @@ async function listMembers(db: D1Database) {
   return json({ ok: true, members: results });
 }
 
-async function listChores(db: D1Database) {
+async function listChores(db: D1Database, includeInactive = false) {
   const { results } = await db
     .prepare(
       `SELECT
@@ -88,6 +113,7 @@ async function listChores(db: D1Database) {
         c.description,
         c.frequency_type,
         c.assigned_member_id,
+        assignee.display_name AS assigned_member_name,
         c.alert_if_overdue,
         c.active,
         c.created_at,
@@ -100,16 +126,26 @@ async function listChores(db: D1Database) {
           WHEN c.frequency_type = 'weekly'
             THEN lc.completed_at IS NULL OR strftime('%Y-%W', lc.completed_at, 'localtime') < strftime('%Y-%W', 'now', 'localtime')
           ELSE 0
-        END AS is_due
+        END AS is_due,
+        CASE
+          WHEN c.frequency_type IN ('daily', 'weekly')
+            AND c.alert_if_overdue = 1
+            AND (lc.completed_at IS NULL
+              OR (c.frequency_type = 'daily' AND date(lc.completed_at, 'localtime') < date('now', 'localtime'))
+              OR (c.frequency_type = 'weekly' AND strftime('%Y-%W', lc.completed_at, 'localtime') < strftime('%Y-%W', 'now', 'localtime')))
+          THEN 1
+          ELSE 0
+        END AS is_overdue
        FROM chores c
+       LEFT JOIN family_members assignee ON assignee.id = c.assigned_member_id
        LEFT JOIN (
         SELECT chore_id, completed_by_member_id, MAX(completed_at) AS completed_at
         FROM chore_completions
         GROUP BY chore_id
        ) lc ON lc.chore_id = c.id
        LEFT JOIN family_members fm ON fm.id = lc.completed_by_member_id
-       WHERE c.active = 1
-       ORDER BY
+       ${includeInactive ? "" : "WHERE c.active = 1"}
+       ORDER BY c.active DESC,
         CASE c.frequency_type
           WHEN 'daily' THEN 1
           WHEN 'weekly' THEN 2
@@ -120,6 +156,38 @@ async function listChores(db: D1Database) {
     .all();
 
   return json({ ok: true, chores: results });
+}
+
+async function todayView(db: D1Database) {
+  const choresResponse = await listChores(db);
+  const choresBody = (await choresResponse.json()) as { chores: Array<Record<string, unknown>> };
+  const chores = choresBody.chores;
+
+  const { results: completedToday } = await db
+    .prepare(
+      `SELECT
+        cc.id,
+        fm.display_name AS member_name,
+        c.name AS chore_name,
+        cc.completed_at,
+        ds.mode AS session_mode,
+        ds.device_label
+       FROM chore_completions cc
+       JOIN family_members fm ON fm.id = cc.completed_by_member_id
+       JOIN chores c ON c.id = cc.chore_id
+       LEFT JOIN device_sessions ds ON ds.id = cc.device_session_id
+       WHERE date(cc.completed_at, 'localtime') = date('now', 'localtime')
+       ORDER BY cc.completed_at DESC
+       LIMIT 30`,
+    )
+    .all();
+
+  return json({
+    ok: true,
+    due: chores.filter((chore) => chore.is_due === 1 && chore.is_overdue !== 1),
+    overdue: chores.filter((chore) => chore.is_overdue === 1),
+    completedToday,
+  });
 }
 
 async function recordCompletion(request: Request, db: D1Database) {
@@ -187,7 +255,7 @@ async function recentCompletions(db: D1Database) {
        JOIN chores c ON c.id = cc.chore_id
        LEFT JOIN device_sessions ds ON ds.id = cc.device_session_id
        ORDER BY cc.completed_at DESC
-       LIMIT 25`,
+       LIMIT 50`,
     )
     .all();
 
@@ -237,6 +305,96 @@ async function kioskSession(request: Request, db: D1Database) {
   });
 }
 
+async function saveMember(request: Request, db: D1Database, id: number | null) {
+  const body = await readJson(request);
+  const displayName = typeof body.display_name === "string" ? body.display_name.trim().slice(0, 80) : "";
+  const memberType = isMemberType(body.member_type) ? body.member_type : null;
+  const sortOrder = asInteger(body.sort_order);
+  const active = asActiveFlag(body.active);
+
+  if (!displayName || !memberType) {
+    return badRequest("Display name and member type are required.");
+  }
+
+  if (id) {
+    await db
+      .prepare(
+        `UPDATE family_members
+         SET display_name = ?, member_type = ?, sort_order = ?, active = ?, updated_at = datetime('now')
+         WHERE id = ?`,
+      )
+      .bind(displayName, memberType, sortOrder, active, id)
+      .run();
+
+    return json({ ok: true, member: { id, display_name: displayName, member_type: memberType, sort_order: sortOrder, active } });
+  }
+
+  const result = await db
+    .prepare(
+      `INSERT INTO family_members (display_name, member_type, sort_order, active)
+       VALUES (?, ?, ?, ?)`,
+    )
+    .bind(displayName, memberType, sortOrder, active)
+    .run();
+
+  return json({
+    ok: true,
+    member: { id: result.meta.last_row_id, display_name: displayName, member_type: memberType, sort_order: sortOrder, active },
+  });
+}
+
+async function saveChore(request: Request, db: D1Database, id: number | null) {
+  const body = await readJson(request);
+  const name = typeof body.name === "string" ? body.name.trim().slice(0, 100) : "";
+  const description = typeof body.description === "string" && body.description.trim() ? body.description.trim().slice(0, 500) : null;
+  const frequencyType = isFrequencyType(body.frequency_type) ? body.frequency_type : null;
+  const assignedMemberId = asPositiveInteger(body.assigned_member_id);
+  const alertIfOverdue = asActiveFlag(body.alert_if_overdue, 0);
+  const active = asActiveFlag(body.active);
+
+  if (!name || !frequencyType) {
+    return badRequest("Chore name and frequency type are required.");
+  }
+
+  if (assignedMemberId) {
+    const member = await getActiveMember(db, assignedMemberId);
+    if (!member) return badRequest("Assigned member was not found.");
+  }
+
+  if (id) {
+    await db
+      .prepare(
+        `UPDATE chores
+         SET name = ?,
+             description = ?,
+             frequency_type = ?,
+             assigned_member_id = ?,
+             alert_if_overdue = ?,
+             active = ?,
+             updated_at = datetime('now')
+         WHERE id = ?`,
+      )
+      .bind(name, description, frequencyType, assignedMemberId, alertIfOverdue, active, id)
+      .run();
+
+    return json({ ok: true, chore: { id, name, description, frequency_type: frequencyType, assigned_member_id: assignedMemberId, alert_if_overdue: alertIfOverdue, active } });
+  }
+
+  const result = await db
+    .prepare(
+      `INSERT INTO chores
+        (name, description, frequency_type, assigned_member_id, alert_if_overdue, active)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(name, description, frequencyType, assignedMemberId, alertIfOverdue, active)
+    .run();
+
+  return json({
+    ok: true,
+    chore: { id: result.meta.last_row_id, name, description, frequency_type: frequencyType, assigned_member_id: assignedMemberId, alert_if_overdue: alertIfOverdue, active },
+  });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method === "OPTIONS") {
@@ -244,12 +402,14 @@ export default {
     }
 
     const url = new URL(request.url);
+    const memberMatch = url.pathname.match(/^\/api\/admin\/members\/(\d+)$/);
+    const choreMatch = url.pathname.match(/^\/api\/admin\/chores\/(\d+)$/);
 
     if (url.pathname === "/health" || url.pathname === "/api/health") {
       return json({
         ok: true,
         service: "family-chores-api",
-        phase: "phase-2-core-workflow",
+        phase: "phase-3-household-beta",
       });
     }
 
@@ -259,6 +419,10 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/api/chores") {
       return listChores(env.DB);
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/today") {
+      return todayView(env.DB);
     }
 
     if (request.method === "POST" && url.pathname === "/api/completions") {
@@ -275,6 +439,34 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/api/session/kiosk") {
       return kioskSession(request, env.DB);
+    }
+
+    if (url.pathname.startsWith("/api/admin/") && !requireParentPin(request, env)) {
+      return unauthorized();
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/admin/members") {
+      return listMembers(env.DB, true);
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/admin/members") {
+      return saveMember(request, env.DB, null);
+    }
+
+    if (request.method === "PUT" && memberMatch) {
+      return saveMember(request, env.DB, Number(memberMatch[1]));
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/admin/chores") {
+      return listChores(env.DB, true);
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/admin/chores") {
+      return saveChore(request, env.DB, null);
+    }
+
+    if (request.method === "PUT" && choreMatch) {
+      return saveChore(request, env.DB, Number(choreMatch[1]));
     }
 
     return json({ ok: false, error: "Not found" }, { status: 404 });

@@ -1,18 +1,28 @@
 import { useEffect, useMemo, useState } from 'react'
 import './App.css'
 
+type MemberType = 'adult' | 'child'
+type FrequencyType = 'daily' | 'weekly' | 'as_needed'
+
 type Member = {
   id: number
   display_name: string
-  member_type: 'adult' | 'child'
+  member_type: MemberType
+  sort_order: number
+  active: 0 | 1
 }
 
 type Chore = {
   id: number
   name: string
   description: string | null
-  frequency_type: 'daily' | 'weekly' | 'as_needed'
+  frequency_type: FrequencyType
+  assigned_member_id: number | null
+  assigned_member_name?: string | null
+  alert_if_overdue: 0 | 1
+  active: 0 | 1
   is_due: 0 | 1
+  is_overdue: 0 | 1
   last_completed_at: string | null
   last_completed_by: string | null
 }
@@ -33,12 +43,54 @@ type SessionState = {
   deviceLabel: string
 }
 
+type TodayState = {
+  due: Chore[]
+  overdue: Chore[]
+  completedToday: Completion[]
+}
+
+type MemberDraft = {
+  id: number | null
+  display_name: string
+  member_type: MemberType
+  sort_order: number
+  active: 0 | 1
+}
+
+type ChoreDraft = {
+  id: number | null
+  name: string
+  description: string
+  frequency_type: FrequencyType
+  assigned_member_id: number | ''
+  alert_if_overdue: 0 | 1
+  active: 0 | 1
+}
+
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
 
 const memberKey = 'family-chores.member-id'
 const sessionKey = 'family-chores.session'
 
-const routes = ['/choose-mode', '/member', '/kiosk', '/history'] as const
+const routes = ['/today', '/choose-mode', '/member', '/kiosk', '/history', '/admin'] as const
+
+const emptyMemberDraft: MemberDraft = {
+  id: null,
+  display_name: '',
+  member_type: 'child',
+  sort_order: 10,
+  active: 1,
+}
+
+const emptyChoreDraft: ChoreDraft = {
+  id: null,
+  name: '',
+  description: '',
+  frequency_type: 'daily',
+  assigned_member_id: '',
+  alert_if_overdue: 0,
+  active: 1,
+}
 
 function isKnownRoute(pathname: string) {
   return routes.includes(pathname as (typeof routes)[number])
@@ -64,9 +116,7 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
 
 function getStoredSession() {
   const raw = localStorage.getItem(sessionKey)
-  if (!raw) {
-    return null
-  }
+  if (!raw) return null
 
   try {
     return JSON.parse(raw) as SessionState
@@ -78,11 +128,12 @@ function getStoredSession() {
 
 function App() {
   const [route, setRoute] = useState(() =>
-    isKnownRoute(window.location.pathname) ? window.location.pathname : '/choose-mode',
+    isKnownRoute(window.location.pathname) ? window.location.pathname : '/today',
   )
   const [members, setMembers] = useState<Member[]>([])
   const [chores, setChores] = useState<Chore[]>([])
   const [history, setHistory] = useState<Completion[]>([])
+  const [today, setToday] = useState<TodayState>({ due: [], overdue: [], completedToday: [] })
   const [loadState, setLoadState] = useState<LoadState>('idle')
   const [error, setError] = useState('')
   const [selectedMemberId, setSelectedMemberId] = useState<number | null>(() => {
@@ -93,6 +144,12 @@ function App() {
   const [pendingChore, setPendingChore] = useState<Chore | null>(null)
   const [kioskMemberId, setKioskMemberId] = useState<number | null>(null)
   const [successMessage, setSuccessMessage] = useState('')
+  const [adminPin, setAdminPin] = useState('')
+  const [adminUnlocked, setAdminUnlocked] = useState(false)
+  const [adminMembers, setAdminMembers] = useState<Member[]>([])
+  const [adminChores, setAdminChores] = useState<Chore[]>([])
+  const [memberDraft, setMemberDraft] = useState<MemberDraft>(emptyMemberDraft)
+  const [choreDraft, setChoreDraft] = useState<ChoreDraft>(emptyChoreDraft)
 
   const selectedMember = useMemo(
     () => members.find((member) => member.id === selectedMemberId) ?? null,
@@ -102,6 +159,8 @@ function App() {
     () => members.find((member) => member.id === kioskMemberId) ?? null,
     [members, kioskMemberId],
   )
+  const dueChores = chores.filter((chore) => chore.is_due === 1)
+  const otherChores = chores.filter((chore) => chore.is_due !== 1)
 
   function navigate(nextRoute: string) {
     window.history.pushState({}, '', nextRoute)
@@ -111,17 +170,26 @@ function App() {
     setSuccessMessage('')
   }
 
-  async function loadCoreData() {
+  async function refreshHousehold() {
     setLoadState('loading')
     setError('')
 
     try {
-      const [memberData, choreData] = await Promise.all([
+      const [memberData, choreData, todayData, historyData] = await Promise.all([
         api<{ ok: boolean; members: Member[] }>('/api/members'),
         api<{ ok: boolean; chores: Chore[] }>('/api/chores'),
+        api<TodayState & { ok: boolean }>('/api/today'),
+        api<{ ok: boolean; completions: Completion[] }>('/api/completions/recent'),
       ])
+
       setMembers(memberData.members)
       setChores(choreData.chores)
+      setToday({
+        due: todayData.due,
+        overdue: todayData.overdue,
+        completedToday: todayData.completedToday,
+      })
+      setHistory(historyData.completions)
       setLoadState('ready')
     } catch (currentError) {
       setError(currentError instanceof Error ? currentError.message : 'Could not load app data.')
@@ -129,21 +197,25 @@ function App() {
     }
   }
 
-  async function loadHistory() {
-    try {
-      const data = await api<{ ok: boolean; completions: Completion[] }>('/api/completions/recent')
-      setHistory(data.completions)
-    } catch (currentError) {
-      setError(currentError instanceof Error ? currentError.message : 'Could not load history.')
-    }
+  async function loadAdminData(pin = adminPin) {
+    const [memberData, choreData] = await Promise.all([
+      api<{ ok: boolean; members: Member[] }>('/api/admin/members', {
+        headers: { 'X-Parent-Pin': pin },
+      }),
+      api<{ ok: boolean; chores: Chore[] }>('/api/admin/chores', {
+        headers: { 'X-Parent-Pin': pin },
+      }),
+    ])
+
+    setAdminMembers(memberData.members)
+    setAdminChores(choreData.chores)
   }
 
   useEffect(() => {
-    void Promise.resolve().then(() => loadCoreData())
-    void Promise.resolve().then(() => loadHistory())
+    void Promise.resolve().then(() => refreshHousehold())
 
     const onPopState = () => {
-      setRoute(isKnownRoute(window.location.pathname) ? window.location.pathname : '/choose-mode')
+      setRoute(isKnownRoute(window.location.pathname) ? window.location.pathname : '/today')
     }
 
     window.addEventListener('popstate', onPopState)
@@ -195,32 +267,72 @@ function App() {
     const member = members.find((item) => item.id === memberId)
     setSuccessMessage(`${member?.display_name ?? 'Someone'} completed ${chore.name}.`)
     setPendingChore(null)
-    await Promise.all([loadCoreData(), loadHistory()])
+    await refreshHousehold()
 
     if (mode === 'kiosk') {
       setKioskMemberId(null)
     }
   }
 
-  const dueChores = chores.filter((chore) => chore.is_due === 1)
-  const otherChores = chores.filter((chore) => chore.is_due !== 1)
+  async function unlockAdmin() {
+    setError('')
+    try {
+      await loadAdminData(adminPin)
+      setAdminUnlocked(true)
+    } catch (currentError) {
+      setError(currentError instanceof Error ? currentError.message : 'Could not unlock parent setup.')
+    }
+  }
+
+  async function saveMember() {
+    const method = memberDraft.id ? 'PUT' : 'POST'
+    const path = memberDraft.id ? `/api/admin/members/${memberDraft.id}` : '/api/admin/members'
+    await api(path, {
+      method,
+      headers: { 'X-Parent-Pin': adminPin },
+      body: JSON.stringify(memberDraft),
+    })
+    setMemberDraft(emptyMemberDraft)
+    await Promise.all([loadAdminData(), refreshHousehold()])
+  }
+
+  async function saveChore() {
+    const method = choreDraft.id ? 'PUT' : 'POST'
+    const path = choreDraft.id ? `/api/admin/chores/${choreDraft.id}` : '/api/admin/chores'
+    await api(path, {
+      method,
+      headers: { 'X-Parent-Pin': adminPin },
+      body: JSON.stringify({
+        ...choreDraft,
+        assigned_member_id: choreDraft.assigned_member_id === '' ? null : choreDraft.assigned_member_id,
+      }),
+    })
+    setChoreDraft(emptyChoreDraft)
+    await Promise.all([loadAdminData(), refreshHousehold()])
+  }
 
   return (
     <main className="app-shell">
       <header className="top-bar">
-        <button type="button" className="brand-button" onClick={() => navigate('/choose-mode')}>
+        <button type="button" className="brand-button" onClick={() => navigate('/today')}>
           Family Chores
         </button>
         <nav aria-label="Main navigation">
+          <button type="button" onClick={() => navigate('/today')}>Today</button>
           <button type="button" onClick={() => navigate('/member')}>Member</button>
           <button type="button" onClick={() => navigate('/kiosk')}>Kiosk</button>
           <button type="button" onClick={() => navigate('/history')}>History</button>
+          <button type="button" onClick={() => navigate('/admin')}>Setup</button>
         </nav>
       </header>
 
       {loadState === 'loading' && <p className="notice">Loading household data...</p>}
       {error && <p className="notice error">{error}</p>}
       {successMessage && <p className="notice success">{successMessage}</p>}
+
+      {route === '/today' && (
+        <TodayView today={today} chores={chores} onStart={() => navigate('/choose-mode')} />
+      )}
 
       {route === '/choose-mode' && (
         <section className="screen">
@@ -272,7 +384,6 @@ function App() {
 
           {selectedMember && (
             <ChorePicker
-              chores={chores}
               dueChores={dueChores}
               otherChores={otherChores}
               pendingChore={pendingChore}
@@ -286,7 +397,7 @@ function App() {
       )}
 
       {route === '/kiosk' && (
-        <section className="screen">
+        <section className="screen kiosk-screen">
           <div className="screen-heading">
             <p className="eyebrow">Kiosk mode</p>
             <h1>{kioskMember ? kioskMember.display_name : 'Who finished a chore?'}</h1>
@@ -308,7 +419,6 @@ function App() {
                 Change person
               </button>
               <ChorePicker
-                chores={chores}
                 dueChores={dueChores}
                 otherChores={otherChores}
                 pendingChore={pendingChore}
@@ -322,31 +432,80 @@ function App() {
         </section>
       )}
 
-      {route === '/history' && (
-        <section className="screen">
-          <div className="screen-heading">
-            <p className="eyebrow">Recent history</p>
-            <h1>What happened lately</h1>
-          </div>
+      {route === '/history' && <HistoryView history={history} />}
 
-          <div className="history-list">
-            {history.length === 0 && <p className="empty-state">No chores have been completed yet.</p>}
-            {history.map((completion) => (
-              <article key={completion.id} className="history-item">
-                <div>
-                  <strong>{completion.member_name}</strong>
-                  <span>{completion.chore_name}</span>
-                </div>
-                <div className="history-meta">
-                  <span>{formatDateTime(completion.completed_at)}</span>
-                  <span>{completion.device_label ?? completion.session_mode ?? 'Unknown device'}</span>
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
+      {route === '/admin' && (
+        <AdminView
+          pin={adminPin}
+          unlocked={adminUnlocked}
+          members={adminMembers}
+          chores={adminChores}
+          memberDraft={memberDraft}
+          choreDraft={choreDraft}
+          onPinChange={setAdminPin}
+          onUnlock={() => void unlockAdmin()}
+          onMemberDraftChange={setMemberDraft}
+          onChoreDraftChange={setChoreDraft}
+          onSaveMember={() => void saveMember()}
+          onSaveChore={() => void saveChore()}
+        />
       )}
     </main>
+  )
+}
+
+function TodayView({
+  today,
+  chores,
+  onStart,
+}: {
+  today: TodayState
+  chores: Chore[]
+  onStart: () => void
+}) {
+  return (
+    <section className="screen">
+      <div className="screen-heading">
+        <p className="eyebrow">Today</p>
+        <h1>Household view</h1>
+      </div>
+
+      <div className="today-summary">
+        <div>
+          <strong>{today.due.length}</strong>
+          <span>due</span>
+        </div>
+        <div>
+          <strong>{today.overdue.length}</strong>
+          <span>overdue</span>
+        </div>
+        <div>
+          <strong>{today.completedToday.length}</strong>
+          <span>done today</span>
+        </div>
+      </div>
+
+      <button type="button" className="primary-action" onClick={onStart}>
+        Record a chore
+      </button>
+
+      <div className="chores-layout">
+        <ReadOnlyChoreSection title="Overdue" chores={today.overdue} emptyText="Nothing overdue." />
+        <ReadOnlyChoreSection title="Due today" chores={today.due} emptyText="No due chores right now." />
+      </div>
+
+      <section className="panel">
+        <h2>Completed today</h2>
+        <div className="history-list">
+          {today.completedToday.length === 0 && <p className="empty-state">Nothing completed today yet.</p>}
+          {today.completedToday.map((completion) => (
+            <HistoryItem key={completion.id} completion={completion} />
+          ))}
+        </div>
+      </section>
+
+      <ReadOnlyChoreSection title="All active chores" chores={chores} emptyText="No active chores." />
+    </section>
   )
 }
 
@@ -359,7 +518,6 @@ function ChorePicker({
   onCancel,
   onConfirm,
 }: {
-  chores: Chore[]
   dueChores: Chore[]
   otherChores: Chore[]
   pendingChore: Chore | null
@@ -411,12 +569,7 @@ function ChoreSection({
         {chores.map((chore) => (
           <button key={chore.id} type="button" className="chore-button" onClick={() => onPick(chore)}>
             <span>{chore.name}</span>
-            <small>
-              {frequencyLabel(chore.frequency_type)}
-              {chore.last_completed_at
-                ? ` · last by ${chore.last_completed_by ?? 'someone'} ${relativeDate(chore.last_completed_at)}`
-                : ''}
-            </small>
+            <small>{choreMeta(chore)}</small>
           </button>
         ))}
       </div>
@@ -424,18 +577,336 @@ function ChoreSection({
   )
 }
 
-function frequencyLabel(frequency: Chore['frequency_type']) {
-  if (frequency === 'as_needed') {
-    return 'As needed'
+function ReadOnlyChoreSection({
+  title,
+  chores,
+  emptyText,
+}: {
+  title: string
+  chores: Chore[]
+  emptyText: string
+}) {
+  return (
+    <section className="panel">
+      <h2>{title}</h2>
+      <div className="read-list">
+        {chores.length === 0 && <p className="empty-state">{emptyText}</p>}
+        {chores.map((chore) => (
+          <article key={chore.id} className="read-item">
+            <strong>{chore.name}</strong>
+            <span>{choreMeta(chore)}</span>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function HistoryView({ history }: { history: Completion[] }) {
+  const grouped = history.reduce<Record<string, Completion[]>>((groups, completion) => {
+    const key = new Date(`${completion.completed_at}Z`).toDateString()
+    groups[key] = [...(groups[key] ?? []), completion]
+    return groups
+  }, {})
+
+  return (
+    <section className="screen">
+      <div className="screen-heading">
+        <p className="eyebrow">History</p>
+        <h1>What happened lately</h1>
+      </div>
+
+      {history.length === 0 && <p className="empty-state">No chores have been completed yet.</p>}
+      {Object.entries(grouped).map(([day, completions]) => (
+        <section key={day} className="panel">
+          <h2>{dayLabel(day)}</h2>
+          <div className="history-list">
+            {completions.map((completion) => (
+              <HistoryItem key={completion.id} completion={completion} />
+            ))}
+          </div>
+        </section>
+      ))}
+    </section>
+  )
+}
+
+function HistoryItem({ completion }: { completion: Completion }) {
+  return (
+    <article className="history-item">
+      <div>
+        <strong>{completion.member_name}</strong>
+        <span>{completion.chore_name}</span>
+      </div>
+      <div className="history-meta">
+        <span>{formatTime(completion.completed_at)}</span>
+        <span>{completion.device_label ?? completion.session_mode ?? 'Unknown device'}</span>
+      </div>
+    </article>
+  )
+}
+
+function AdminView({
+  pin,
+  unlocked,
+  members,
+  chores,
+  memberDraft,
+  choreDraft,
+  onPinChange,
+  onUnlock,
+  onMemberDraftChange,
+  onChoreDraftChange,
+  onSaveMember,
+  onSaveChore,
+}: {
+  pin: string
+  unlocked: boolean
+  members: Member[]
+  chores: Chore[]
+  memberDraft: MemberDraft
+  choreDraft: ChoreDraft
+  onPinChange: (pin: string) => void
+  onUnlock: () => void
+  onMemberDraftChange: (draft: MemberDraft) => void
+  onChoreDraftChange: (draft: ChoreDraft) => void
+  onSaveMember: () => void
+  onSaveChore: () => void
+}) {
+  if (!unlocked) {
+    return (
+      <section className="screen narrow">
+        <div className="screen-heading">
+          <p className="eyebrow">Parent setup</p>
+          <h1>Enter parent PIN</h1>
+        </div>
+        <section className="panel">
+          <label>
+            PIN
+            <input
+              inputMode="numeric"
+              maxLength={8}
+              type="password"
+              value={pin}
+              onChange={(event) => onPinChange(event.target.value)}
+            />
+          </label>
+          <button type="button" className="primary-action" onClick={onUnlock}>
+            Unlock setup
+          </button>
+        </section>
+      </section>
+    )
   }
 
+  return (
+    <section className="screen">
+      <div className="screen-heading">
+        <p className="eyebrow">Parent setup</p>
+        <h1>Manage household</h1>
+      </div>
+
+      <div className="admin-layout">
+        <section className="panel">
+          <h2>{memberDraft.id ? 'Edit family member' : 'Add family member'}</h2>
+          <label>
+            Display name
+            <input
+              value={memberDraft.display_name}
+              onChange={(event) => onMemberDraftChange({ ...memberDraft, display_name: event.target.value })}
+            />
+          </label>
+          <label>
+            Type
+            <select
+              value={memberDraft.member_type}
+              onChange={(event) => onMemberDraftChange({ ...memberDraft, member_type: event.target.value as MemberType })}
+            >
+              <option value="adult">Adult</option>
+              <option value="child">Child</option>
+            </select>
+          </label>
+          <label>
+            Sort order
+            <input
+              type="number"
+              value={memberDraft.sort_order}
+              onChange={(event) => onMemberDraftChange({ ...memberDraft, sort_order: Number(event.target.value) })}
+            />
+          </label>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={memberDraft.active === 1}
+              onChange={(event) => onMemberDraftChange({ ...memberDraft, active: event.target.checked ? 1 : 0 })}
+            />
+            Active
+          </label>
+          <div className="action-row">
+            <button type="button" className="primary-action" onClick={onSaveMember}>
+              Save member
+            </button>
+            <button type="button" className="secondary-action" onClick={() => onMemberDraftChange(emptyMemberDraft)}>
+              New
+            </button>
+          </div>
+        </section>
+
+        <section className="panel">
+          <h2>{choreDraft.id ? 'Edit chore' : 'Add chore'}</h2>
+          <label>
+            Chore name
+            <input
+              value={choreDraft.name}
+              onChange={(event) => onChoreDraftChange({ ...choreDraft, name: event.target.value })}
+            />
+          </label>
+          <label>
+            Description
+            <textarea
+              value={choreDraft.description}
+              onChange={(event) => onChoreDraftChange({ ...choreDraft, description: event.target.value })}
+            />
+          </label>
+          <label>
+            Frequency
+            <select
+              value={choreDraft.frequency_type}
+              onChange={(event) => onChoreDraftChange({ ...choreDraft, frequency_type: event.target.value as FrequencyType })}
+            >
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="as_needed">As needed</option>
+            </select>
+          </label>
+          <label>
+            Assign to
+            <select
+              value={choreDraft.assigned_member_id}
+              onChange={(event) =>
+                onChoreDraftChange({
+                  ...choreDraft,
+                  assigned_member_id: event.target.value === '' ? '' : Number(event.target.value),
+                })
+              }
+            >
+              <option value="">Anyone</option>
+              {members.filter((member) => member.active === 1).map((member) => (
+                <option key={member.id} value={member.id}>
+                  {member.display_name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={choreDraft.alert_if_overdue === 1}
+              onChange={(event) => onChoreDraftChange({ ...choreDraft, alert_if_overdue: event.target.checked ? 1 : 0 })}
+            />
+            Track overdue
+          </label>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={choreDraft.active === 1}
+              onChange={(event) => onChoreDraftChange({ ...choreDraft, active: event.target.checked ? 1 : 0 })}
+            />
+            Active
+          </label>
+          <div className="action-row">
+            <button type="button" className="primary-action" onClick={onSaveChore}>
+              Save chore
+            </button>
+            <button type="button" className="secondary-action" onClick={() => onChoreDraftChange(emptyChoreDraft)}>
+              New
+            </button>
+          </div>
+        </section>
+      </div>
+
+      <div className="admin-layout">
+        <section className="panel">
+          <h2>Family members</h2>
+          <div className="read-list">
+            {members.map((member) => (
+              <article key={member.id} className="read-item">
+                <strong>{member.display_name}</strong>
+                <span>
+                  {member.member_type} · order {member.sort_order} · {member.active ? 'active' : 'inactive'}
+                </span>
+                <button type="button" onClick={() => onMemberDraftChange({ ...member })}>
+                  Edit
+                </button>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel">
+          <h2>Chores</h2>
+          <div className="read-list">
+            {chores.map((chore) => (
+              <article key={chore.id} className="read-item">
+                <strong>{chore.name}</strong>
+                <span>
+                  {frequencyLabel(chore.frequency_type)} · {chore.active ? 'active' : 'inactive'}
+                  {chore.assigned_member_name ? ` · ${chore.assigned_member_name}` : ''}
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onChoreDraftChange({
+                      id: chore.id,
+                      name: chore.name,
+                      description: chore.description ?? '',
+                      frequency_type: chore.frequency_type,
+                      assigned_member_id: chore.assigned_member_id ?? '',
+                      alert_if_overdue: chore.alert_if_overdue,
+                      active: chore.active,
+                    })
+                  }
+                >
+                  Edit
+                </button>
+              </article>
+            ))}
+          </div>
+        </section>
+      </div>
+    </section>
+  )
+}
+
+function choreMeta(chore: Chore) {
+  const assigned = chore.assigned_member_name ? ` · assigned to ${chore.assigned_member_name}` : ''
+  const lastDone = chore.last_completed_at
+    ? ` · last by ${chore.last_completed_by ?? 'someone'} ${relativeDate(chore.last_completed_at)}`
+    : ''
+  const status = chore.is_overdue ? 'Overdue' : chore.is_due ? 'Due' : 'Current'
+
+  return `${frequencyLabel(chore.frequency_type)} · ${status}${assigned}${lastDone}`
+}
+
+function frequencyLabel(frequency: FrequencyType) {
+  if (frequency === 'as_needed') return 'As needed'
   return frequency[0].toUpperCase() + frequency.slice(1)
 }
 
-function formatDateTime(value: string) {
+function dayLabel(value: string) {
+  const date = new Date(value)
+  const today = new Date()
+  const yesterday = new Date()
+  yesterday.setDate(today.getDate() - 1)
+
+  if (date.toDateString() === today.toDateString()) return 'Today'
+  if (date.toDateString() === yesterday.toDateString()) return 'Yesterday'
+
+  return new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'short', day: 'numeric' }).format(date)
+}
+
+function formatTime(value: string) {
   return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
   }).format(new Date(`${value}Z`))
@@ -444,9 +915,11 @@ function formatDateTime(value: string) {
 function relativeDate(value: string) {
   const date = new Date(`${value}Z`)
   const today = new Date()
-  if (date.toDateString() === today.toDateString()) {
-    return 'today'
-  }
+  const yesterday = new Date()
+  yesterday.setDate(today.getDate() - 1)
+
+  if (date.toDateString() === today.toDateString()) return 'today'
+  if (date.toDateString() === yesterday.toDateString()) return 'yesterday'
 
   return `on ${new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(date)}`
 }

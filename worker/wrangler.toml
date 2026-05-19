@@ -7,3 +7,6 @@ binding = "DB"
 database_name = "family-chores"
 database_id = "local-family-chores"
 migrations_dir = "../database/migrations"
+
+# Configure the real parent PIN as a Cloudflare secret:
+# wrangler secret put PARENT_PIN

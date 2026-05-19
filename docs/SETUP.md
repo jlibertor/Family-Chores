@@ -48,6 +48,20 @@ The first migration creates the core tables and inserts starter family members a
 
 During local frontend development, Vite proxies `/api` requests to the Worker at `http://127.0.0.1:8787`.
 
+## Parent PIN
+
+Parent setup uses a simple PIN gate. For local development, the Worker falls back to:
+
+```text
+1234
+```
+
+For deployed environments, configure the PIN as a Cloudflare Worker secret:
+
+```bash
+npx wrangler secret put PARENT_PIN --config worker/wrangler.toml
+```
+
 ## Checks
 
 Build both workspaces:
@@ -61,6 +75,28 @@ Run lint checks:
 ```bash
 npm run lint
 ```
+
+## Deployment
+
+Build before deploying:
+
+```bash
+npm run build
+```
+
+Deploy the Worker after configuring the remote D1 database binding and `PARENT_PIN` secret:
+
+```bash
+npm run deploy:worker
+```
+
+Deploy the frontend to Cloudflare Pages:
+
+```bash
+npm run deploy:frontend
+```
+
+Do not commit Cloudflare credentials, database IDs for private environments, or secrets.
 
 ## Local Files To Keep Private
 
