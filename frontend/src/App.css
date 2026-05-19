@@ -196,6 +196,12 @@ button:focus-visible {
   background: var(--soft);
 }
 
+.danger-action {
+  border-color: #f3b4b4;
+  background: #fff1f1;
+  color: #8a1f1f;
+}
+
 .chore-list {
   display: grid;
   gap: 10px;

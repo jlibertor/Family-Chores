@@ -420,6 +420,32 @@ function App() {
     }
   }
 
+  async function deleteMember(member: Member) {
+    if (!window.confirm(`Delete ${member.display_name} from active family members? Their old history will be kept.`)) {
+      return
+    }
+
+    setError('')
+
+    try {
+      await api(`/api/admin/members/${member.id}`, {
+        method: 'DELETE',
+        headers: { 'X-Parent-Pin': adminPin },
+      })
+
+      if (selectedMemberId === member.id) {
+        localStorage.removeItem(memberKey)
+        setSelectedMemberId(null)
+      }
+
+      setMemberDraft(emptyMemberDraft)
+      await Promise.all([loadAdminData(), refreshHousehold()])
+      setSuccessMessage(`${member.display_name} deleted from active family members.`)
+    } catch (currentError) {
+      setError(currentError instanceof Error ? currentError.message : 'Could not delete family member.')
+    }
+  }
+
   async function saveChore() {
     setError('')
 
@@ -713,6 +739,7 @@ function App() {
           onChoreDraftChange={setChoreDraft}
           onNoteDraftChange={setNoteDraft}
           onSaveMember={() => void saveMember()}
+          onDeleteMember={(member) => void deleteMember(member)}
           onSaveChore={() => void saveChore()}
           onSaveNote={() => void saveNote()}
           onExport={() => void exportHouseholdData()}
@@ -1196,6 +1223,7 @@ function AdminView({
   onChoreDraftChange,
   onNoteDraftChange,
   onSaveMember,
+  onDeleteMember,
   onSaveChore,
   onSaveNote,
   onExport,
@@ -1214,6 +1242,7 @@ function AdminView({
   onChoreDraftChange: (draft: ChoreDraft) => void
   onNoteDraftChange: (draft: NoteDraft) => void
   onSaveMember: () => void
+  onDeleteMember: (member: Member) => void
   onSaveChore: () => void
   onSaveNote: () => void
   onExport: () => void
@@ -1440,6 +1469,11 @@ function AdminView({
                 <button type="button" onClick={() => onMemberDraftChange({ ...member })}>
                   Edit
                 </button>
+                {member.active === 1 && (
+                  <button type="button" className="danger-action" onClick={() => onDeleteMember(member)}>
+                    Delete
+                  </button>
+                )}
               </article>
             ))}
           </div>

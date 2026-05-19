@@ -55,6 +55,24 @@ const adminMembers = await request('/api/admin/members', {
 })
 assert(Array.isArray(adminMembers.members), 'Admin members endpoint should return members.')
 
+const temporaryMember = await request('/api/admin/members', {
+  method: 'POST',
+  headers: { 'X-Parent-Pin': parentPin },
+  body: JSON.stringify({
+    display_name: 'Smoke Test Member',
+    member_type: 'child',
+    sort_order: 99,
+    active: 1,
+  }),
+})
+assert(temporaryMember.member?.id, 'Admin members endpoint should create a member.')
+
+const deletedMember = await request(`/api/admin/members/${temporaryMember.member.id}`, {
+  method: 'DELETE',
+  headers: { 'X-Parent-Pin': parentPin },
+})
+assert(deletedMember.member?.active === 0, 'Admin members endpoint should delete a member safely.')
+
 const note = await request('/api/admin/notes', {
   method: 'POST',
   headers: { 'X-Parent-Pin': parentPin },

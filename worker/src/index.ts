@@ -10,7 +10,7 @@ type FrequencyType = "daily" | "weekly" | "monthly" | "as_needed";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "Content-Type, X-Parent-Pin",
-  "Access-Control-Allow-Methods": "GET,POST,PUT,OPTIONS",
+  "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
 };
 
 const json = (body: unknown, init: ResponseInit = {}) =>
@@ -428,6 +428,36 @@ async function saveMember(request: Request, db: D1Database, id: number | null) {
   });
 }
 
+async function deleteMember(db: D1Database, id: number) {
+  const member = await db
+    .prepare("SELECT id FROM family_members WHERE id = ?")
+    .bind(id)
+    .first<{ id: number }>();
+
+  if (!member) {
+    return badRequest("Member was not found.");
+  }
+
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE family_members
+         SET active = 0, updated_at = datetime('now')
+         WHERE id = ?`,
+      )
+      .bind(id),
+    db
+      .prepare(
+        `UPDATE chores
+         SET assigned_member_id = NULL, updated_at = datetime('now')
+         WHERE assigned_member_id = ?`,
+      )
+      .bind(id),
+  ]);
+
+  return json({ ok: true, member: { id, active: 0 } });
+}
+
 async function saveChore(request: Request, db: D1Database, id: number | null) {
   const body = await readJson(request);
   const name = typeof body.name === "string" ? body.name.trim().slice(0, 100) : "";
@@ -625,6 +655,10 @@ export default {
 
     if (request.method === "PUT" && memberMatch) {
       return saveMember(request, env.DB, Number(memberMatch[1]));
+    }
+
+    if (request.method === "DELETE" && memberMatch) {
+      return deleteMember(env.DB, Number(memberMatch[1]));
     }
 
     if (request.method === "GET" && url.pathname === "/api/admin/chores") {

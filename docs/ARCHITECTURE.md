@@ -45,6 +45,7 @@ Parent setup endpoints require the `X-Parent-Pin` header:
 - `GET /api/admin/members`
 - `POST /api/admin/members`
 - `PUT /api/admin/members/:id`
+- `DELETE /api/admin/members/:id`
 - `GET /api/admin/chores`
 - `POST /api/admin/chores`
 - `PUT /api/admin/chores/:id`

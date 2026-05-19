@@ -44,6 +44,7 @@ Implemented beta features:
 
 - Parent setup area with simple PIN
 - Manage family members and chores
+- Delete family members from active use while preserving history
 - Activate and deactivate chores
 - Assign chores optionally
 - Basic daily and weekly due or overdue behavior

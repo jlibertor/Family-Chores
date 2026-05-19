@@ -39,6 +39,7 @@ The smoke script verifies:
 - today endpoint
 - household status endpoint
 - admin PIN gate
+- family member create and safe delete
 - household notes
 - lightweight export
 - display and notes screens
