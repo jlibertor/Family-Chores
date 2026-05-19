@@ -213,18 +213,22 @@ button:focus-visible {
   max-width: 620px;
 }
 
-.member-grid {
+.member-grid,
+.chore-grid {
   display: grid;
   gap: 8px;
 }
 
 .member-grid-header,
-.member-grid-row {
+.member-grid-row,
+.chore-grid-header,
+.chore-grid-row {
   display: grid;
   gap: 8px;
 }
 
-.member-grid-header {
+.member-grid-header,
+.chore-grid-header {
   display: none;
   color: var(--muted);
   font-size: 0.82rem;
@@ -232,25 +236,33 @@ button:focus-visible {
   text-transform: uppercase;
 }
 
-.member-grid-row {
+.member-grid-row,
+.chore-grid-row {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--soft);
   padding: 12px;
 }
 
-.member-grid-row span {
+.member-grid-row span,
+.chore-grid-row span {
   color: var(--muted);
   font-weight: 700;
 }
 
-.member-grid-actions {
+.chore-grid-row span {
+  overflow-wrap: anywhere;
+}
+
+.member-grid-actions,
+.chore-grid-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.member-grid-actions button {
+.member-grid-actions button,
+.chore-grid-actions button {
   min-height: 40px;
   padding: 6px 12px;
 }
@@ -542,7 +554,22 @@ button:focus-visible {
     align-items: center;
   }
 
-  .member-grid-header {
+  .chore-grid-header,
+  .chore-grid-row {
+    grid-template-columns:
+      minmax(90px, 1.2fr)
+      minmax(120px, 1.5fr)
+      minmax(78px, 0.8fr)
+      minmax(88px, 0.9fr)
+      minmax(64px, 0.6fr)
+      minmax(70px, 0.7fr)
+      minmax(56px, 0.6fr)
+      minmax(74px, 0.7fr);
+    align-items: center;
+  }
+
+  .member-grid-header,
+  .chore-grid-header {
     display: grid;
     padding: 0 12px;
   }

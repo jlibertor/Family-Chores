@@ -1395,8 +1395,8 @@ function AdminView({
       )}
 
       {section === 'chores' && (
-        <div className="admin-layout">
-          <section className="panel">
+        <>
+          <section className="panel setup-form-panel">
             <h2>{choreDraft.id ? 'Edit chore' : 'Add chore'}</h2>
             <label>
               Chore name
@@ -1479,37 +1479,50 @@ function AdminView({
 
           <section className="panel">
             <h2>Chores</h2>
-            <div className="read-list">
+            <div className="chore-grid">
+              <div className="chore-grid-header" aria-hidden="true">
+                <span>Name</span>
+                <span>Description</span>
+                <span>Frequency</span>
+                <span>Assigned</span>
+                <span>Overdue</span>
+                <span>Reminder</span>
+                <span>Active</span>
+                <span>Actions</span>
+              </div>
               {chores.map((chore) => (
-                <article key={chore.id} className="read-item">
+                <article key={chore.id} className="chore-grid-row">
                   <strong>{chore.name}</strong>
-                  <span>
-                    {frequencyLabel(chore.frequency_type)} · {chore.active ? 'active' : 'inactive'}
-                    {chore.assigned_member_name ? ` · ${chore.assigned_member_name}` : ''}
-                    {chore.needs_reminder ? ' · reminder' : ''}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onChoreDraftChange({
-                        id: chore.id,
-                        name: chore.name,
-                        description: chore.description ?? '',
-                        frequency_type: chore.frequency_type,
-                        assigned_member_id: chore.assigned_member_id ?? '',
-                        alert_if_overdue: chore.alert_if_overdue,
-                        needs_reminder: chore.needs_reminder,
-                        active: chore.active,
-                      })
-                    }
-                  >
-                    Edit
-                  </button>
+                  <span>{chore.description || 'None'}</span>
+                  <span>{frequencyLabel(chore.frequency_type)}</span>
+                  <span>{chore.assigned_member_name || 'Anyone'}</span>
+                  <span>{chore.alert_if_overdue ? 'Yes' : 'No'}</span>
+                  <span>{chore.needs_reminder ? 'Yes' : 'No'}</span>
+                  <span>{chore.active ? 'Yes' : 'No'}</span>
+                  <div className="chore-grid-actions">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onChoreDraftChange({
+                          id: chore.id,
+                          name: chore.name,
+                          description: chore.description ?? '',
+                          frequency_type: chore.frequency_type,
+                          assigned_member_id: chore.assigned_member_id ?? '',
+                          alert_if_overdue: chore.alert_if_overdue,
+                          needs_reminder: chore.needs_reminder,
+                          active: chore.active,
+                        })
+                      }
+                    >
+                      Edit
+                    </button>
+                  </div>
                 </article>
               ))}
             </div>
           </section>
-        </div>
+        </>
       )}
 
       {section === 'backup' && (
