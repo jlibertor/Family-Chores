@@ -76,3 +76,6 @@ Lightweight convenience now included:
 - Smart chore ordering
 - Calm household activity feed
 - Low-light mounted display mode
+- Gentle household rhythm indicators
+- Quick household notes without entering setup
+- Small quick actions for repeated chores

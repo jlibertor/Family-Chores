@@ -256,6 +256,18 @@ button:focus-visible {
   gap: 8px;
 }
 
+.rhythm-list {
+  display: grid;
+  gap: 8px;
+}
+
+.rhythm-list p {
+  border-left: 4px solid var(--primary);
+  color: var(--heading);
+  font-weight: 700;
+  padding-left: 10px;
+}
+
 .suggestion-list p {
   border-left: 4px solid var(--primary);
   padding-left: 10px;
@@ -362,6 +374,17 @@ button:focus-visible {
 .activity-feed small {
   color: var(--muted);
   font-weight: 700;
+}
+
+.quick-action-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.quick-action-grid button {
+  min-height: 68px;
+  padding: 10px;
 }
 
 .history-meta {

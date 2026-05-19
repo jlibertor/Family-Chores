@@ -33,6 +33,7 @@ Current endpoints:
 - `GET /api/today`
 - `GET /api/status`
 - `GET /api/notes`
+- `POST /api/notes`
 - `POST /api/completions`
 - `GET /api/completions/recent`
 - `POST /api/session/select-member`
@@ -52,7 +53,7 @@ Parent setup endpoints require the `X-Parent-Pin` header:
 - `PUT /api/admin/notes/:id`
 - `GET /api/admin/export`
 
-Frontend routes include operational screens (`/today`, `/member`, `/kiosk`, `/history`, `/admin`) plus long-running household screens (`/display`, `/notes`).
+Frontend routes include operational screens (`/today`, `/member`, `/kiosk`, `/history`, `/admin`) plus long-running household screens (`/display`, `/notes`). The `/today` route includes gentle rhythm indicators and quick actions that intentionally stay small.
 
 ## Database
 

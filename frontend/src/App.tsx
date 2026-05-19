@@ -221,6 +221,7 @@ function App() {
   const [memberDraft, setMemberDraft] = useState<MemberDraft>(emptyMemberDraft)
   const [choreDraft, setChoreDraft] = useState<ChoreDraft>(emptyChoreDraft)
   const [noteDraft, setNoteDraft] = useState<NoteDraft>(emptyNoteDraft)
+  const [quickNoteDraft, setQuickNoteDraft] = useState<NoteDraft>(emptyNoteDraft)
   const [submitting, setSubmitting] = useState(false)
   const [completionNote, setCompletionNote] = useState('')
   const [notificationsEnabled, setNotificationsEnabled] = useState(
@@ -460,6 +461,22 @@ function App() {
     }
   }
 
+  async function saveQuickNote() {
+    setError('')
+
+    try {
+      await api('/api/notes', {
+        method: 'POST',
+        body: JSON.stringify(quickNoteDraft),
+      })
+      setQuickNoteDraft(emptyNoteDraft)
+      await refreshHousehold()
+      setSuccessMessage('Household note added.')
+    } catch (currentError) {
+      setError(currentError instanceof Error ? currentError.message : 'Could not add household note.')
+    }
+  }
+
   async function exportHouseholdData() {
     setError('')
 
@@ -478,6 +495,22 @@ function App() {
     } catch (currentError) {
       setError(currentError instanceof Error ? currentError.message : 'Could not export household data.')
     }
+  }
+
+  function quickCompleteByName(choreNames: string[]) {
+    if (!selectedMember) {
+      setError('Choose a member device before using quick actions.')
+      navigate('/member')
+      return
+    }
+
+    const chore = chores.find((item) => choreNames.includes(item.name) && item.active === 1)
+    if (!chore) {
+      setError('That quick action does not match an active chore.')
+      return
+    }
+
+    void submitCompletion(selectedMember.id, chore, 'member')
   }
 
   async function enableNotifications() {
@@ -528,8 +561,10 @@ function App() {
           chores={chores}
           status={status}
           history={history}
+          selectedMemberName={selectedMember?.display_name ?? null}
           notificationsEnabled={notificationsEnabled}
           onEnableNotifications={() => void enableNotifications()}
+          onQuickComplete={quickCompleteByName}
           onStart={() => navigate('/choose-mode')}
         />
       )}
@@ -538,7 +573,14 @@ function App() {
         <DisplayView today={today} status={status} notes={notes} history={history} currentTime={currentTime} />
       )}
 
-      {route === '/notes' && <NotesView notes={notes} />}
+      {route === '/notes' && (
+        <NotesView
+          notes={notes}
+          draft={quickNoteDraft}
+          onDraftChange={setQuickNoteDraft}
+          onSave={() => void saveQuickNote()}
+        />
+      )}
 
       {route === '/choose-mode' && (
         <section className="screen">
@@ -727,7 +769,17 @@ function DisplayView({
   )
 }
 
-function NotesView({ notes }: { notes: HouseholdNote[] }) {
+function NotesView({
+  notes,
+  draft,
+  onDraftChange,
+  onSave,
+}: {
+  notes: HouseholdNote[]
+  draft: NoteDraft
+  onDraftChange: (draft: NoteDraft) => void
+  onSave: () => void
+}) {
   const grouped = notes.reduce<Record<NoteType, HouseholdNote[]>>(
     (groups, note) => {
       groups[note.note_type] = [...groups[note.note_type], note]
@@ -742,6 +794,33 @@ function NotesView({ notes }: { notes: HouseholdNote[] }) {
         <p className="eyebrow">Household notes</p>
         <h1>Quick reminders</h1>
       </div>
+
+      <section className="panel">
+        <h2>Add quick note</h2>
+        <label>
+          Type
+          <select
+            value={draft.note_type}
+            onChange={(event) => onDraftChange({ ...draft, note_type: event.target.value as NoteType })}
+          >
+            <option value="note">Note</option>
+            <option value="shopping">Shopping</option>
+            <option value="reminder">Reminder</option>
+          </select>
+        </label>
+        <label>
+          Text
+          <textarea
+            placeholder="Need milk, trash pickup tomorrow, dog medicine tonight"
+            value={draft.text}
+            onChange={(event) => onDraftChange({ ...draft, text: event.target.value })}
+          />
+        </label>
+        <button type="button" className="primary-action" onClick={onSave}>
+          Add note
+        </button>
+      </section>
+
       {(['reminder', 'shopping', 'note'] as NoteType[]).map((type) => (
         <section key={type} className="panel">
           <h2>{noteTypeLabel(type)}</h2>
@@ -765,18 +844,24 @@ function TodayView({
   chores,
   status,
   history,
+  selectedMemberName,
   notificationsEnabled,
   onEnableNotifications,
+  onQuickComplete,
   onStart,
 }: {
   today: TodayState
   chores: Chore[]
   status: HouseholdStatus
   history: Completion[]
+  selectedMemberName: string | null
   notificationsEnabled: boolean
   onEnableNotifications: () => void
+  onQuickComplete: (choreNames: string[]) => void
   onStart: () => void
 }) {
+  const indicators = routineIndicators(today, status)
+
   return (
     <section className="screen">
       <div className="screen-heading">
@@ -803,6 +888,15 @@ function TodayView({
         Record a chore
       </button>
 
+      <section className="panel">
+        <h2>Household rhythm</h2>
+        <div className="rhythm-list">
+          {indicators.map((indicator) => (
+            <p key={indicator}>{indicator}</p>
+          ))}
+        </div>
+      </section>
+
       <section className="panel status-panel">
         <h2>This week</h2>
         <div className="status-grid">
@@ -826,6 +920,11 @@ function TodayView({
         </button>
       </section>
 
+      <QuickActions
+        selectedMemberName={selectedMemberName}
+        onQuickComplete={onQuickComplete}
+      />
+
       <div className="chores-layout">
         <ReadOnlyChoreSection title="Overdue" chores={sortChoresForHousehold(today.overdue)} emptyText="Nothing overdue." />
         <ReadOnlyChoreSection title="Due today" chores={sortChoresForHousehold(today.due)} emptyText="No due chores right now." />
@@ -844,6 +943,34 @@ function TodayView({
       <ActivityFeed history={history} />
 
       <ReadOnlyChoreSection title="All active chores" chores={sortChoresForHousehold(chores)} emptyText="No active chores." />
+    </section>
+  )
+}
+
+function QuickActions({
+  selectedMemberName,
+  onQuickComplete,
+}: {
+  selectedMemberName: string | null
+  onQuickComplete: (choreNames: string[]) => void
+}) {
+  return (
+    <section className="panel">
+      <h2>Quick actions</h2>
+      <p className="empty-state">
+        {selectedMemberName ? `Completes as ${selectedMemberName}.` : 'Choose a member device before quick actions.'}
+      </p>
+      <div className="quick-action-grid">
+        <button type="button" onClick={() => onQuickComplete(['Feed Pets'])}>
+          Pets fed
+        </button>
+        <button type="button" onClick={() => onQuickComplete(['Wash Dishes', 'Wipe Kitchen Counters'])}>
+          Kitchen reset
+        </button>
+        <button type="button" onClick={() => onQuickComplete(['Take Out Trash'])}>
+          Trash to curb
+        </button>
+      </div>
     </section>
   )
 }
@@ -1381,6 +1508,32 @@ function choreMeta(chore: Chore) {
   const status = chore.is_overdue ? 'Overdue' : chore.is_due ? 'Due' : 'Current'
 
   return `${frequencyLabel(chore.frequency_type)} · ${status}${assigned}${lastDone}`
+}
+
+function routineIndicators(today: TodayState, status: HouseholdStatus) {
+  const indicators: string[] = []
+
+  if (today.overdue.length === 0 && today.due.length === 0) {
+    indicators.push('All scheduled chores are current.')
+  } else if (today.overdue.length === 0) {
+    indicators.push('No overdue chores right now.')
+  } else {
+    indicators.push(`${today.overdue.length} chore${today.overdue.length === 1 ? '' : 's'} need attention.`)
+  }
+
+  if (today.completedToday.length >= 5) {
+    indicators.push('Great teamwork today.')
+  } else if (today.completedToday.length > 0) {
+    indicators.push(`${today.completedToday.length} chore${today.completedToday.length === 1 ? '' : 's'} completed today.`)
+  } else {
+    indicators.push('A fresh household day is ready to start.')
+  }
+
+  if (status.weekly.totalCompleted >= 10) {
+    indicators.push('Weekly cleanup is moving well.')
+  }
+
+  return indicators
 }
 
 function sortChoresForHousehold(items: Chore[]) {

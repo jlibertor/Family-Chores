@@ -591,6 +591,10 @@ export default {
       return listNotes(env.DB);
     }
 
+    if (request.method === "POST" && url.pathname === "/api/notes") {
+      return saveNote(request, env.DB, null);
+    }
+
     if (request.method === "POST" && url.pathname === "/api/completions") {
       return recordCompletion(request, env.DB);
     }

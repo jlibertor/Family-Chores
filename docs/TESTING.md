@@ -42,6 +42,7 @@ The smoke script verifies:
 - household notes
 - lightweight export
 - display and notes screens
+- household rhythm and quick actions
 - kiosk session creation
 - completion insert
 - recent history
