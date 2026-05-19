@@ -4,6 +4,7 @@ import './App.css'
 type MemberType = 'adult' | 'child'
 type FrequencyType = 'daily' | 'weekly' | 'monthly' | 'as_needed'
 type NoteType = 'note' | 'shopping' | 'reminder'
+type AssignmentMode = 'household_anyone' | 'assigned_individual' | 'per_person'
 
 type Member = {
   id: number
@@ -18,8 +19,13 @@ type Chore = {
   name: string
   description: string | null
   frequency_type: FrequencyType
+  assignment_mode: AssignmentMode
   assigned_member_id: number | null
   assigned_member_name?: string | null
+  assignment_member_ids?: string | null
+  assignment_member_names?: string | null
+  responsible_member_id?: number | null
+  responsible_member_name?: string | null
   alert_if_overdue: 0 | 1
   needs_reminder: 0 | 1
   active: 0 | 1
@@ -32,6 +38,7 @@ type Chore = {
 type Completion = {
   id: number
   member_name: string
+  responsible_member_name: string | null
   chore_name: string
   completed_at: string
   session_mode: 'member' | 'kiosk' | 'admin' | null
@@ -95,6 +102,8 @@ type ChoreDraft = {
   name: string
   description: string
   frequency_type: FrequencyType
+  assignment_mode: AssignmentMode
+  assignment_member_ids: number[]
   assigned_member_id: number | ''
   alert_if_overdue: 0 | 1
   needs_reminder: 0 | 1
@@ -128,6 +137,8 @@ const emptyChoreDraft: ChoreDraft = {
   name: '',
   description: '',
   frequency_type: 'daily',
+  assignment_mode: 'household_anyone',
+  assignment_member_ids: [],
   assigned_member_id: '',
   alert_if_overdue: 0,
   needs_reminder: 0,
@@ -195,6 +206,8 @@ function App() {
   )
   const [members, setMembers] = useState<Member[]>([])
   const [chores, setChores] = useState<Chore[]>([])
+  const [memberChores, setMemberChores] = useState<Chore[]>([])
+  const [kioskChores, setKioskChores] = useState<Chore[]>([])
   const [history, setHistory] = useState<Completion[]>([])
   const [notes, setNotes] = useState<HouseholdNote[]>([])
   const [today, setToday] = useState<TodayState>({ due: [], overdue: [], completedToday: [] })
@@ -237,8 +250,10 @@ function App() {
     () => members.find((member) => member.id === kioskMemberId) ?? null,
     [members, kioskMemberId],
   )
-  const dueChores = sortChoresForHousehold(chores.filter((chore) => chore.is_due === 1))
-  const otherChores = sortChoresForHousehold(chores.filter((chore) => chore.is_due !== 1))
+  const memberDueChores = sortChoresForHousehold(memberChores.filter((chore) => chore.is_due === 1))
+  const memberOtherChores = sortChoresForHousehold(memberChores.filter((chore) => chore.is_due !== 1))
+  const kioskDueChores = sortChoresForHousehold(kioskChores.filter((chore) => chore.is_due === 1))
+  const kioskOtherChores = sortChoresForHousehold(kioskChores.filter((chore) => chore.is_due !== 1))
 
   function navigate(nextRoute: string) {
     window.history.pushState({}, '', nextRoute)
@@ -301,6 +316,11 @@ function App() {
     setAdminNotes(noteData.notes)
   }
 
+  async function loadChoresForMember(memberId: number) {
+    const data = await api<{ ok: boolean; chores: Chore[] }>(`/api/members/${memberId}/chores`)
+    return data.chores
+  }
+
   useEffect(() => {
     void Promise.resolve().then(() => refreshHousehold())
     const clock = window.setInterval(() => setCurrentTime(new Date()), 30_000)
@@ -315,6 +335,30 @@ function App() {
       window.removeEventListener('popstate', onPopState)
     }
   }, [])
+
+  useEffect(() => {
+    if (!selectedMemberId) {
+      return
+    }
+
+    void loadChoresForMember(selectedMemberId)
+      .then(setMemberChores)
+      .catch((currentError) =>
+        setError(currentError instanceof Error ? currentError.message : 'Could not load member chores.'),
+      )
+  }, [selectedMemberId])
+
+  useEffect(() => {
+    if (!kioskMemberId) {
+      return
+    }
+
+    void loadChoresForMember(kioskMemberId)
+      .then(setKioskChores)
+      .catch((currentError) =>
+        setError(currentError instanceof Error ? currentError.message : 'Could not load kiosk chores.'),
+      )
+  }, [kioskMemberId])
 
   async function chooseMemberDevice(memberId: number) {
     setError('')
@@ -331,6 +375,7 @@ function App() {
 
       localStorage.setItem(memberKey, String(memberId))
       localStorage.setItem(sessionKey, JSON.stringify(data.session))
+      setMemberChores([])
       setSelectedMemberId(memberId)
       setSession(data.session)
       navigate('/member')
@@ -380,9 +425,13 @@ function App() {
       setPendingChore(null)
       setCompletionNote('')
       await refreshHousehold()
+      const refreshedChores = await loadChoresForMember(memberId)
 
       if (mode === 'kiosk') {
+        setKioskChores(refreshedChores)
         setKioskMemberId(null)
+      } else {
+        setMemberChores(refreshedChores)
       }
     } catch (currentError) {
       setError(currentError instanceof Error ? currentError.message : 'Could not save that completion.')
@@ -457,7 +506,7 @@ function App() {
         headers: { 'X-Parent-Pin': adminPin },
         body: JSON.stringify({
           ...choreDraft,
-          assigned_member_id: choreDraft.assigned_member_id === '' ? null : choreDraft.assigned_member_id,
+          assigned_member_id: choreDraft.assignment_member_ids[0] ?? null,
         }),
       })
       setChoreDraft(emptyChoreDraft)
@@ -679,8 +728,8 @@ function App() {
 
           {selectedMember && (
             <ChorePicker
-              dueChores={dueChores}
-              otherChores={otherChores}
+              dueChores={memberDueChores}
+              otherChores={memberOtherChores}
               pendingChore={pendingChore}
               memberName={selectedMember.display_name}
               onPick={setPendingChore}
@@ -709,7 +758,14 @@ function App() {
               <KioskStatus today={today} status={status} currentTime={currentTime} />
               <div className="button-grid large">
                 {members.map((member) => (
-                  <button key={member.id} type="button" onClick={() => setKioskMemberId(member.id)}>
+                  <button
+                    key={member.id}
+                    type="button"
+                    onClick={() => {
+                      setKioskChores([])
+                      setKioskMemberId(member.id)
+                    }}
+                  >
                     {member.display_name}
                   </button>
                 ))}
@@ -723,8 +779,8 @@ function App() {
                 Change person
               </button>
               <ChorePicker
-                dueChores={dueChores}
-                otherChores={otherChores}
+                dueChores={kioskDueChores}
+                otherChores={kioskOtherChores}
                 pendingChore={pendingChore}
                 memberName={kioskMember.display_name}
                 onPick={setPendingChore}
@@ -1150,7 +1206,7 @@ function ChoreSection({
       <div className="chore-list">
         {chores.length === 0 && <p className="empty-state">Nothing here right now.</p>}
         {chores.map((chore) => (
-          <button key={chore.id} type="button" className="chore-button" onClick={() => onPick(chore)}>
+          <button key={choreKey(chore)} type="button" className="chore-button" onClick={() => onPick(chore)}>
             <span>{chore.name}</span>
             <small>{choreMeta(chore)}</small>
           </button>
@@ -1175,7 +1231,7 @@ function ReadOnlyChoreSection({
       <div className="read-list">
         {chores.length === 0 && <p className="empty-state">{emptyText}</p>}
         {chores.map((chore) => (
-          <article key={chore.id} className="read-item">
+          <article key={choreKey(chore)} className="read-item">
             <strong>{chore.name}</strong>
             <span>{choreMeta(chore)}</span>
           </article>
@@ -1220,6 +1276,9 @@ function HistoryItem({ completion }: { completion: Completion }) {
       <div>
         <strong>{completion.member_name}</strong>
         <span>{completion.chore_name}</span>
+        {completion.responsible_member_name && completion.responsible_member_name !== completion.member_name && (
+          <small>For {completion.responsible_member_name}</small>
+        )}
       </div>
       <div className="history-meta">
         <span>{formatTime(completion.completed_at)}</span>
@@ -1272,6 +1331,28 @@ function AdminView({
   onExport: () => void
 }) {
   const [section, setSection] = useState<'menu' | 'members' | 'chores' | 'notes' | 'backup'>('menu')
+  const activeMembers = members.filter((member) => member.active === 1)
+
+  function updateChoreAssignmentMode(assignment_mode: AssignmentMode) {
+    onChoreDraftChange({
+      ...choreDraft,
+      assignment_mode,
+      assignment_member_ids: assignment_mode === 'household_anyone' ? [] : choreDraft.assignment_member_ids.slice(0, 1),
+      assigned_member_id: assignment_mode === 'assigned_individual' ? choreDraft.assignment_member_ids[0] ?? '' : '',
+    })
+  }
+
+  function updateChoreAssignmentMember(memberId: number, checked: boolean) {
+    const nextIds = checked
+      ? [...new Set([...choreDraft.assignment_member_ids, memberId])]
+      : choreDraft.assignment_member_ids.filter((id) => id !== memberId)
+
+    onChoreDraftChange({
+      ...choreDraft,
+      assignment_member_ids: nextIds,
+      assigned_member_id: choreDraft.assignment_mode === 'assigned_individual' ? nextIds[0] ?? '' : '',
+    })
+  }
 
   if (!unlocked) {
     return (
@@ -1449,24 +1530,57 @@ function AdminView({
               </select>
             </label>
             <label>
-              Assign to
+              Who needs to do this?
               <select
-                value={choreDraft.assigned_member_id}
-                onChange={(event) =>
-                  onChoreDraftChange({
-                    ...choreDraft,
-                    assigned_member_id: event.target.value === '' ? '' : Number(event.target.value),
-                  })
-                }
+                value={choreDraft.assignment_mode}
+                onChange={(event) => updateChoreAssignmentMode(event.target.value as AssignmentMode)}
               >
-                <option value="">Anyone</option>
-                {members.filter((member) => member.active === 1).map((member) => (
-                  <option key={member.id} value={member.id}>
-                    {member.display_name}
-                  </option>
-                ))}
+                <option value="household_anyone">Anyone in the family can do it once</option>
+                <option value="assigned_individual">One specific person</option>
+                <option value="per_person">Each selected person must do it individually</option>
               </select>
             </label>
+            {choreDraft.assignment_mode === 'assigned_individual' && (
+              <label>
+                Assigned person
+                <select
+                  value={choreDraft.assignment_member_ids[0] ?? ''}
+                  onChange={(event) => {
+                    const memberId = event.target.value === '' ? null : Number(event.target.value)
+                    onChoreDraftChange({
+                      ...choreDraft,
+                      assignment_member_ids: memberId ? [memberId] : [],
+                      assigned_member_id: memberId ?? '',
+                    })
+                  }}
+                >
+                  <option value="">Choose a person</option>
+                  {activeMembers.map((member) => (
+                    <option key={member.id} value={member.id}>
+                      {member.display_name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {choreDraft.assignment_mode === 'per_person' && (
+              <fieldset className="check-group">
+                <legend>Assigned people</legend>
+                {activeMembers.map((member) => (
+                  <label key={member.id} className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={choreDraft.assignment_member_ids.includes(member.id)}
+                      onChange={(event) => updateChoreAssignmentMember(member.id, event.target.checked)}
+                    />
+                    {member.display_name}
+                  </label>
+                ))}
+              </fieldset>
+            )}
+            {choreDraft.assignment_mode === 'household_anyone' && (
+              <p className="empty-state">This chore appears for every active family member and is done once per period.</p>
+            )}
             <label className="check-row">
               <input
                 type="checkbox"
@@ -1508,7 +1622,7 @@ function AdminView({
                 <span>Name</span>
                 <span>Description</span>
                 <span>Frequency</span>
-                <span>Assigned</span>
+                <span>Assignment</span>
                 <span>Overdue</span>
                 <span>Reminder</span>
                 <span>Active</span>
@@ -1519,7 +1633,7 @@ function AdminView({
                   <strong>{chore.name}</strong>
                   <span>{chore.description || 'None'}</span>
                   <span>{frequencyLabel(chore.frequency_type)}</span>
-                  <span>{chore.assigned_member_name || 'Anyone'}</span>
+                  <span>{assignmentLabel(chore)}</span>
                   <span>{chore.alert_if_overdue ? 'Yes' : 'No'}</span>
                   <span>{chore.needs_reminder ? 'Yes' : 'No'}</span>
                   <span>{chore.active ? 'Yes' : 'No'}</span>
@@ -1532,7 +1646,9 @@ function AdminView({
                           name: chore.name,
                           description: chore.description ?? '',
                           frequency_type: chore.frequency_type,
-                          assigned_member_id: chore.assigned_member_id ?? '',
+                          assignment_mode: chore.assignment_mode ?? 'household_anyone',
+                          assignment_member_ids: parseAssignmentMemberIds(chore),
+                          assigned_member_id: parseAssignmentMemberIds(chore)[0] ?? '',
                           alert_if_overdue: chore.alert_if_overdue,
                           needs_reminder: chore.needs_reminder,
                           active: chore.active,
@@ -1626,13 +1742,42 @@ function AdminView({
 }
 
 function choreMeta(chore: Chore) {
-  const assigned = chore.assigned_member_name ? ` · assigned to ${chore.assigned_member_name}` : ''
+  const assigned = chore.responsible_member_name
+    ? ` · for ${chore.responsible_member_name}`
+    : chore.assignment_mode === 'household_anyone'
+      ? ' · household'
+      : chore.assigned_member_name
+        ? ` · assigned to ${chore.assigned_member_name}`
+        : ''
   const lastDone = chore.last_completed_at
     ? ` · last by ${chore.last_completed_by ?? 'someone'} ${relativeDate(chore.last_completed_at)}`
     : ''
   const status = chore.is_overdue ? 'Overdue' : chore.is_due ? 'Due' : 'Current'
 
   return `${frequencyLabel(chore.frequency_type)} · ${status}${assigned}${lastDone}`
+}
+
+function choreKey(chore: Chore) {
+  return `${chore.id}-${chore.responsible_member_id ?? 'household'}`
+}
+
+function parseAssignmentMemberIds(chore: Chore) {
+  if (chore.assignment_member_ids) {
+    return chore.assignment_member_ids
+      .split(',')
+      .map((id) => Number(id))
+      .filter((id) => Number.isInteger(id) && id > 0)
+  }
+
+  return chore.assigned_member_id ? [chore.assigned_member_id] : []
+}
+
+function assignmentLabel(chore: Chore) {
+  if (chore.assignment_mode === 'household_anyone') return 'Anyone once'
+  if (chore.assignment_mode === 'assigned_individual') {
+    return chore.assignment_member_names || chore.assigned_member_name || 'One person'
+  }
+  return chore.assignment_member_names || 'Selected people'
 }
 
 function routineIndicators(today: TodayState, status: HouseholdStatus) {

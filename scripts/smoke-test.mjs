@@ -55,6 +55,38 @@ const adminMembers = await request('/api/admin/members', {
 })
 assert(Array.isArray(adminMembers.members), 'Admin members endpoint should return members.')
 
+const memberChores = await request(`/api/members/${members.members[0].id}/chores`)
+assert(Array.isArray(memberChores.chores), 'Member chore endpoint should return chores.')
+
+const temporaryChore = await request('/api/admin/chores', {
+  method: 'POST',
+  headers: { 'X-Parent-Pin': parentPin },
+  body: JSON.stringify({
+    name: 'Smoke Test Assigned Chore',
+    description: 'Temporary smoke test chore',
+    frequency_type: 'daily',
+    assignment_mode: 'assigned_individual',
+    assignment_member_ids: [members.members[0].id],
+    assigned_member_id: members.members[0].id,
+    alert_if_overdue: 1,
+    needs_reminder: 0,
+    active: 1,
+  }),
+})
+assert(temporaryChore.chore?.id, 'Admin chores endpoint should create a chore.')
+
+const assignedChores = await request(`/api/members/${members.members[0].id}/chores`)
+assert(
+  assignedChores.chores.some((chore) => chore.id === temporaryChore.chore.id),
+  'Assigned chore should appear for the assigned member.',
+)
+
+const deletedChore = await request(`/api/admin/chores/${temporaryChore.chore.id}`, {
+  method: 'DELETE',
+  headers: { 'X-Parent-Pin': parentPin },
+})
+assert(deletedChore.chore?.active === 0, 'Admin chores endpoint should delete a chore safely.')
+
 const temporaryMember = await request('/api/admin/members', {
   method: 'POST',
   headers: { 'X-Parent-Pin': parentPin },

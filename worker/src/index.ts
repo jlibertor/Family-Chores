@@ -6,6 +6,7 @@ interface Env {
 type SessionMode = "member" | "kiosk" | "admin";
 type MemberType = "adult" | "child";
 type FrequencyType = "daily" | "weekly" | "monthly" | "as_needed";
+type AssignmentMode = "household_anyone" | "assigned_individual" | "per_person";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -49,6 +50,11 @@ const asActiveFlag = (value: unknown, fallback = 1) => {
   return fallback;
 };
 
+const asPositiveIntegerList = (value: unknown) =>
+  Array.isArray(value)
+    ? [...new Set(value.map((item) => asPositiveInteger(item)).filter((item): item is number => item !== null))]
+    : [];
+
 const isSessionMode = (value: unknown): value is SessionMode =>
   value === "member" || value === "kiosk" || value === "admin";
 
@@ -56,6 +62,9 @@ const isMemberType = (value: unknown): value is MemberType => value === "adult" 
 
 const isFrequencyType = (value: unknown): value is FrequencyType =>
   value === "daily" || value === "weekly" || value === "monthly" || value === "as_needed";
+
+const isAssignmentMode = (value: unknown): value is AssignmentMode =>
+  value === "household_anyone" || value === "assigned_individual" || value === "per_person";
 
 const requireParentPin = (request: Request, env: Env) => {
   const expectedPin = env.PARENT_PIN ?? "1234";
@@ -70,9 +79,29 @@ const getActiveMember = (db: D1Database, id: number) =>
 
 const getActiveChore = (db: D1Database, id: number) =>
   db
-    .prepare("SELECT id, name FROM chores WHERE id = ? AND active = 1")
+    .prepare("SELECT id, name, assignment_mode FROM chores WHERE id = ? AND active = 1")
     .bind(id)
-    .first<{ id: number; name: string }>();
+    .first<{ id: number; name: string; assignment_mode: AssignmentMode }>();
+
+async function getResponsibleMemberId(db: D1Database, choreId: number, memberId: number) {
+  const chore = await getActiveChore(db, choreId);
+  if (!chore) return { chore: null, responsibleMemberId: null };
+
+  if (chore.assignment_mode === "household_anyone") {
+    return { chore, responsibleMemberId: null };
+  }
+
+  const assignment = await db
+    .prepare(
+      `SELECT family_member_id
+       FROM chore_assignments
+       WHERE chore_id = ? AND family_member_id = ? AND active = 1`,
+    )
+    .bind(choreId, memberId)
+    .first<{ family_member_id: number }>();
+
+  return { chore, responsibleMemberId: assignment?.family_member_id ?? null };
+}
 
 async function createDeviceSession(
   db: D1Database,
@@ -104,7 +133,99 @@ async function listMembers(db: D1Database, includeInactive = false) {
   return json({ ok: true, members: results });
 }
 
-async function listChores(db: D1Database, includeInactive = false) {
+const choreSelect = `
+  SELECT
+    c.id,
+    c.name,
+    c.description,
+    c.frequency_type,
+    c.assignment_mode,
+    c.assigned_member_id,
+    assignee.display_name AS assigned_member_name,
+    c.alert_if_overdue,
+    COALESCE(c.needs_reminder, 0) AS needs_reminder,
+    c.active,
+    c.created_at,
+    c.updated_at,
+    obligations.responsible_member_id,
+    responsible.display_name AS responsible_member_name,
+    lc.completed_at AS last_completed_at,
+    fm.display_name AS last_completed_by,
+    CASE
+      WHEN c.frequency_type = 'daily'
+        THEN lc.completed_at IS NULL OR date(lc.completed_at, 'localtime') < date('now', 'localtime')
+      WHEN c.frequency_type = 'weekly'
+        THEN lc.completed_at IS NULL OR strftime('%Y-%W', lc.completed_at, 'localtime') < strftime('%Y-%W', 'now', 'localtime')
+      WHEN c.frequency_type = 'monthly'
+        THEN lc.completed_at IS NULL OR strftime('%Y-%m', lc.completed_at, 'localtime') < strftime('%Y-%m', 'now', 'localtime')
+      ELSE 0
+    END AS is_due,
+    CASE
+      WHEN c.frequency_type IN ('daily', 'weekly', 'monthly')
+        AND c.alert_if_overdue = 1
+        AND (lc.completed_at IS NULL
+          OR (c.frequency_type = 'daily' AND date(lc.completed_at, 'localtime') < date('now', 'localtime'))
+          OR (c.frequency_type = 'weekly' AND strftime('%Y-%W', lc.completed_at, 'localtime') < strftime('%Y-%W', 'now', 'localtime'))
+          OR (c.frequency_type = 'monthly' AND strftime('%Y-%m', lc.completed_at, 'localtime') < strftime('%Y-%m', 'now', 'localtime')))
+      THEN 1
+      ELSE 0
+    END AS is_overdue
+   FROM chores c
+   JOIN (
+    SELECT id AS chore_id, NULL AS responsible_member_id
+    FROM chores
+    WHERE assignment_mode = 'household_anyone'
+    UNION ALL
+    SELECT ca.chore_id, ca.family_member_id AS responsible_member_id
+    FROM chore_assignments ca
+    JOIN chores assigned_chore ON assigned_chore.id = ca.chore_id
+    WHERE ca.active = 1
+      AND assigned_chore.assignment_mode IN ('assigned_individual', 'per_person')
+   ) obligations ON obligations.chore_id = c.id
+   LEFT JOIN family_members assignee ON assignee.id = c.assigned_member_id
+   LEFT JOIN family_members responsible ON responsible.id = obligations.responsible_member_id
+   LEFT JOIN (
+    SELECT chore_id, responsible_member_id, completed_by_member_id, MAX(completed_at) AS completed_at
+    FROM chore_completions
+    GROUP BY chore_id, responsible_member_id
+   ) lc ON lc.chore_id = c.id
+      AND (
+        (obligations.responsible_member_id IS NULL AND lc.responsible_member_id IS NULL)
+        OR lc.responsible_member_id = obligations.responsible_member_id
+      )
+   LEFT JOIN family_members fm ON fm.id = lc.completed_by_member_id
+`;
+
+async function listChores(db: D1Database, memberId: number | null = null) {
+  const filters = ["c.active = 1"];
+  const binds: number[] = [];
+
+  if (memberId) {
+    filters.push("(c.assignment_mode = 'household_anyone' OR obligations.responsible_member_id = ?)");
+    binds.push(memberId);
+  }
+
+  const { results } = await db
+    .prepare(
+      `${choreSelect}
+       WHERE ${filters.join(" AND ")}
+       ORDER BY c.active DESC,
+        CASE c.frequency_type
+          WHEN 'daily' THEN 1
+          WHEN 'weekly' THEN 2
+          WHEN 'monthly' THEN 3
+          ELSE 4
+        END,
+        responsible.sort_order,
+        c.name`,
+    )
+    .bind(...binds)
+    .all();
+
+  return json({ ok: true, chores: results });
+}
+
+async function listAdminChores(db: D1Database) {
   const { results } = await db
     .prepare(
       `SELECT
@@ -112,44 +233,35 @@ async function listChores(db: D1Database, includeInactive = false) {
         c.name,
         c.description,
         c.frequency_type,
+        c.assignment_mode,
         c.assigned_member_id,
-        assignee.display_name AS assigned_member_name,
+        legacy_assignee.display_name AS assigned_member_name,
         c.alert_if_overdue,
         COALESCE(c.needs_reminder, 0) AS needs_reminder,
         c.active,
         c.created_at,
         c.updated_at,
+        GROUP_CONCAT(ca.family_member_id) AS assignment_member_ids,
+        GROUP_CONCAT(fm.display_name) AS assignment_member_names,
+        NULL AS responsible_member_id,
+        NULL AS responsible_member_name,
         lc.completed_at AS last_completed_at,
-        fm.display_name AS last_completed_by,
-        CASE
-          WHEN c.frequency_type = 'daily'
-            THEN lc.completed_at IS NULL OR date(lc.completed_at, 'localtime') < date('now', 'localtime')
-          WHEN c.frequency_type = 'weekly'
-            THEN lc.completed_at IS NULL OR strftime('%Y-%W', lc.completed_at, 'localtime') < strftime('%Y-%W', 'now', 'localtime')
-          WHEN c.frequency_type = 'monthly'
-            THEN lc.completed_at IS NULL OR strftime('%Y-%m', lc.completed_at, 'localtime') < strftime('%Y-%m', 'now', 'localtime')
-          ELSE 0
-        END AS is_due,
-        CASE
-          WHEN c.frequency_type IN ('daily', 'weekly', 'monthly')
-            AND c.alert_if_overdue = 1
-            AND (lc.completed_at IS NULL
-              OR (c.frequency_type = 'daily' AND date(lc.completed_at, 'localtime') < date('now', 'localtime'))
-              OR (c.frequency_type = 'weekly' AND strftime('%Y-%W', lc.completed_at, 'localtime') < strftime('%Y-%W', 'now', 'localtime'))
-              OR (c.frequency_type = 'monthly' AND strftime('%Y-%m', lc.completed_at, 'localtime') < strftime('%Y-%m', 'now', 'localtime')))
-          THEN 1
-          ELSE 0
-        END AS is_overdue
+        last_member.display_name AS last_completed_by,
+        0 AS is_due,
+        0 AS is_overdue
        FROM chores c
-       LEFT JOIN family_members assignee ON assignee.id = c.assigned_member_id
+       LEFT JOIN family_members legacy_assignee ON legacy_assignee.id = c.assigned_member_id
+       LEFT JOIN chore_assignments ca ON ca.chore_id = c.id AND ca.active = 1
+       LEFT JOIN family_members fm ON fm.id = ca.family_member_id
        LEFT JOIN (
         SELECT chore_id, completed_by_member_id, MAX(completed_at) AS completed_at
         FROM chore_completions
         GROUP BY chore_id
        ) lc ON lc.chore_id = c.id
-       LEFT JOIN family_members fm ON fm.id = lc.completed_by_member_id
-       ${includeInactive ? "" : "WHERE c.active = 1"}
-       ORDER BY c.active DESC,
+       LEFT JOIN family_members last_member ON last_member.id = lc.completed_by_member_id
+       WHERE c.active = 1
+       GROUP BY c.id
+       ORDER BY
         CASE c.frequency_type
           WHEN 'daily' THEN 1
           WHEN 'weekly' THEN 2
@@ -173,6 +285,7 @@ async function todayView(db: D1Database) {
       `SELECT
         cc.id,
         fm.display_name AS member_name,
+        responsible.display_name AS responsible_member_name,
         c.name AS chore_name,
         cc.completed_at,
         ds.mode AS session_mode,
@@ -180,6 +293,7 @@ async function todayView(db: D1Database) {
        FROM chore_completions cc
        JOIN family_members fm ON fm.id = cc.completed_by_member_id
        JOIN chores c ON c.id = cc.chore_id
+       LEFT JOIN family_members responsible ON responsible.id = cc.responsible_member_id
        LEFT JOIN device_sessions ds ON ds.id = cc.device_session_id
        WHERE date(cc.completed_at, 'localtime') = date('now', 'localtime')
        ORDER BY cc.completed_at DESC
@@ -288,17 +402,21 @@ async function recordCompletion(request: Request, db: D1Database) {
     return badRequest("memberId and choreId are required.");
   }
 
-  const [member, chore] = await Promise.all([
+  const [member, obligation] = await Promise.all([
     getActiveMember(db, memberId),
-    getActiveChore(db, choreId),
+    getResponsibleMemberId(db, choreId, memberId),
   ]);
 
   if (!member) {
     return badRequest("Member was not found.");
   }
 
-  if (!chore) {
+  if (!obligation.chore) {
     return badRequest("Chore was not found.");
+  }
+
+  if (obligation.chore.assignment_mode !== "household_anyone" && !obligation.responsibleMemberId) {
+    return badRequest("That chore is not assigned to this member.");
   }
 
   const completionSessionId =
@@ -307,10 +425,10 @@ async function recordCompletion(request: Request, db: D1Database) {
   const result = await db
     .prepare(
       `INSERT INTO chore_completions
-        (chore_id, completed_by_member_id, device_session_id, notes, points)
-       VALUES (?, ?, ?, ?, ?)`,
+        (chore_id, completed_by_member_id, responsible_member_id, device_session_id, notes, points)
+       VALUES (?, ?, ?, ?, ?, ?)`,
     )
-    .bind(choreId, memberId, completionSessionId, notes, points)
+    .bind(choreId, memberId, obligation.responsibleMemberId, completionSessionId, notes, points)
     .run();
 
   return json({
@@ -319,6 +437,7 @@ async function recordCompletion(request: Request, db: D1Database) {
       id: result.meta.last_row_id,
       choreId,
       memberId,
+      responsibleMemberId: obligation.responsibleMemberId,
       deviceSessionId: completionSessionId,
     },
   });
@@ -330,6 +449,7 @@ async function recentCompletions(db: D1Database) {
       `SELECT
         cc.id,
         fm.display_name AS member_name,
+        responsible.display_name AS responsible_member_name,
         c.name AS chore_name,
         cc.completed_at,
         ds.mode AS session_mode,
@@ -338,6 +458,7 @@ async function recentCompletions(db: D1Database) {
        FROM chore_completions cc
        JOIN family_members fm ON fm.id = cc.completed_by_member_id
        JOIN chores c ON c.id = cc.chore_id
+       LEFT JOIN family_members responsible ON responsible.id = cc.responsible_member_id
        LEFT JOIN device_sessions ds ON ds.id = cc.device_session_id
        ORDER BY cc.completed_at DESC
        LIMIT 50`,
@@ -453,6 +574,13 @@ async function deleteMember(db: D1Database, id: number) {
          WHERE assigned_member_id = ?`,
       )
       .bind(id),
+    db
+      .prepare(
+        `UPDATE chore_assignments
+         SET active = 0, updated_at = datetime('now')
+         WHERE family_member_id = ?`,
+      )
+      .bind(id),
   ]);
 
   return json({ ok: true, member: { id, active: 0 } });
@@ -485,7 +613,16 @@ async function saveChore(request: Request, db: D1Database, id: number | null) {
   const name = typeof body.name === "string" ? body.name.trim().slice(0, 100) : "";
   const description = typeof body.description === "string" && body.description.trim() ? body.description.trim().slice(0, 500) : null;
   const frequencyType = isFrequencyType(body.frequency_type) ? body.frequency_type : null;
-  const assignedMemberId = asPositiveInteger(body.assigned_member_id);
+  const assignmentMode = isAssignmentMode(body.assignment_mode) ? body.assignment_mode : "household_anyone";
+  const assignmentMemberIds =
+    assignmentMode === "household_anyone"
+      ? []
+      : asPositiveIntegerList(body.assignment_member_ids).length > 0
+        ? asPositiveIntegerList(body.assignment_member_ids)
+        : asPositiveInteger(body.assigned_member_id)
+          ? [asPositiveInteger(body.assigned_member_id) as number]
+          : [];
+  const assignedMemberId = assignmentMode === "assigned_individual" ? assignmentMemberIds[0] ?? null : null;
   const alertIfOverdue = asActiveFlag(body.alert_if_overdue, 0);
   const needsReminder = asActiveFlag(body.needs_reminder, 0);
   const active = asActiveFlag(body.active);
@@ -494,8 +631,16 @@ async function saveChore(request: Request, db: D1Database, id: number | null) {
     return badRequest("Chore name and frequency type are required.");
   }
 
-  if (assignedMemberId) {
-    const member = await getActiveMember(db, assignedMemberId);
+  if (assignmentMode === "assigned_individual" && assignmentMemberIds.length !== 1) {
+    return badRequest("Choose one assigned family member.");
+  }
+
+  if (assignmentMode === "per_person" && assignmentMemberIds.length === 0) {
+    return badRequest("Choose at least one family member.");
+  }
+
+  for (const memberId of assignmentMemberIds) {
+    const member = await getActiveMember(db, memberId);
     if (!member) return badRequest("Assigned member was not found.");
   }
 
@@ -506,6 +651,7 @@ async function saveChore(request: Request, db: D1Database, id: number | null) {
          SET name = ?,
              description = ?,
              frequency_type = ?,
+             assignment_mode = ?,
              assigned_member_id = ?,
              alert_if_overdue = ?,
              needs_reminder = ?,
@@ -513,25 +659,53 @@ async function saveChore(request: Request, db: D1Database, id: number | null) {
              updated_at = datetime('now')
          WHERE id = ?`,
       )
-      .bind(name, description, frequencyType, assignedMemberId, alertIfOverdue, needsReminder, active, id)
+      .bind(name, description, frequencyType, assignmentMode, assignedMemberId, alertIfOverdue, needsReminder, active, id)
       .run();
 
-    return json({ ok: true, chore: { id, name, description, frequency_type: frequencyType, assigned_member_id: assignedMemberId, alert_if_overdue: alertIfOverdue, needs_reminder: needsReminder, active } });
+    await replaceChoreAssignments(db, id, assignmentMemberIds);
+
+    return json({ ok: true, chore: { id, name, description, frequency_type: frequencyType, assignment_mode: assignmentMode, assigned_member_id: assignedMemberId, assignment_member_ids: assignmentMemberIds, alert_if_overdue: alertIfOverdue, needs_reminder: needsReminder, active } });
   }
 
   const result = await db
     .prepare(
       `INSERT INTO chores
-        (name, description, frequency_type, assigned_member_id, alert_if_overdue, needs_reminder, active)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        (name, description, frequency_type, assignment_mode, assigned_member_id, alert_if_overdue, needs_reminder, active)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .bind(name, description, frequencyType, assignedMemberId, alertIfOverdue, needsReminder, active)
+    .bind(name, description, frequencyType, assignmentMode, assignedMemberId, alertIfOverdue, needsReminder, active)
     .run();
+
+  const choreId = Number(result.meta.last_row_id);
+  await replaceChoreAssignments(db, choreId, assignmentMemberIds);
 
   return json({
     ok: true,
-    chore: { id: result.meta.last_row_id, name, description, frequency_type: frequencyType, assigned_member_id: assignedMemberId, alert_if_overdue: alertIfOverdue, needs_reminder: needsReminder, active },
+    chore: { id: choreId, name, description, frequency_type: frequencyType, assignment_mode: assignmentMode, assigned_member_id: assignedMemberId, assignment_member_ids: assignmentMemberIds, alert_if_overdue: alertIfOverdue, needs_reminder: needsReminder, active },
   });
+}
+
+async function replaceChoreAssignments(db: D1Database, choreId: number, memberIds: number[]) {
+  await db
+    .prepare(
+      `UPDATE chore_assignments
+       SET active = 0, updated_at = datetime('now')
+       WHERE chore_id = ?`,
+    )
+    .bind(choreId)
+    .run();
+
+  for (const memberId of memberIds) {
+    await db
+      .prepare(
+        `INSERT INTO chore_assignments (chore_id, family_member_id, active, updated_at)
+         VALUES (?, ?, 1, datetime('now'))
+         ON CONFLICT(chore_id, family_member_id)
+         DO UPDATE SET active = 1, updated_at = datetime('now')`,
+      )
+      .bind(choreId, memberId)
+      .run();
+  }
 }
 
 async function listNotes(db: D1Database, includeInactive = false) {
@@ -585,9 +759,10 @@ async function saveNote(request: Request, db: D1Database, id: number | null) {
 }
 
 async function exportData(db: D1Database) {
-  const [members, chores, completions, sessions, notes] = await Promise.all([
+  const [members, chores, assignments, completions, sessions, notes] = await Promise.all([
     db.prepare("SELECT * FROM family_members ORDER BY sort_order, id").all(),
     db.prepare("SELECT * FROM chores ORDER BY active DESC, id").all(),
+    db.prepare("SELECT * FROM chore_assignments ORDER BY chore_id, family_member_id").all(),
     db.prepare("SELECT * FROM chore_completions ORDER BY completed_at DESC, id DESC LIMIT 1000").all(),
     db.prepare("SELECT id, mode, member_id, device_label, created_at, last_seen_at FROM device_sessions ORDER BY last_seen_at DESC LIMIT 500").all(),
     db.prepare("SELECT * FROM household_notes ORDER BY updated_at DESC, id DESC").all(),
@@ -598,6 +773,7 @@ async function exportData(db: D1Database) {
     exportedAt: new Date().toISOString(),
     members: members.results,
     chores: chores.results,
+    choreAssignments: assignments.results,
     completions: completions.results,
     deviceSessions: sessions.results,
     notes: notes.results,
@@ -612,6 +788,7 @@ export default {
 
     const url = new URL(request.url);
     const memberMatch = url.pathname.match(/^\/api\/admin\/members\/(\d+)$/);
+    const memberChoresMatch = url.pathname.match(/^\/api\/members\/(\d+)\/chores$/);
     const choreMatch = url.pathname.match(/^\/api\/admin\/chores\/(\d+)$/);
     const noteMatch = url.pathname.match(/^\/api\/admin\/notes\/(\d+)$/);
 
@@ -629,6 +806,12 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/api/chores") {
       return listChores(env.DB);
+    }
+
+    if (request.method === "GET" && memberChoresMatch) {
+      const member = await getActiveMember(env.DB, Number(memberChoresMatch[1]));
+      if (!member) return badRequest("Member was not found.");
+      return listChores(env.DB, Number(memberChoresMatch[1]));
     }
 
     if (request.method === "GET" && url.pathname === "/api/today") {
@@ -684,7 +867,7 @@ export default {
     }
 
     if (request.method === "GET" && url.pathname === "/api/admin/chores") {
-      return listChores(env.DB);
+      return listAdminChores(env.DB);
     }
 
     if (request.method === "POST" && url.pathname === "/api/admin/chores") {

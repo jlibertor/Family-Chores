@@ -61,6 +61,20 @@ label {
   font-weight: 700;
 }
 
+fieldset {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+legend {
+  color: var(--heading);
+  font-weight: 800;
+  padding: 0 4px;
+}
+
 button:focus-visible {
   outline: 3px solid var(--focus);
   outline-offset: 2px;

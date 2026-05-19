@@ -1,6 +1,6 @@
 # Data Model
 
-This document describes the intended Phase 1 data model. The schema is a draft and should evolve in small migrations as the app moves into Phase 2 and Phase 3.
+This document describes the current household data model. The schema should evolve in small migrations and remain understandable.
 
 ## Family Member
 
@@ -26,8 +26,28 @@ Fields:
 - `name`
 - `description`
 - `frequency_type`, such as `daily`, `weekly`, `monthly`, or `as_needed`
-- `assigned_member_id`, nullable
+- `assignment_mode`: `household_anyone`, `assigned_individual`, or `per_person`
+- `assigned_member_id`, nullable legacy convenience field for one-person assignment
 - `alert_if_overdue`
+- `active`
+- `created_at`
+- `updated_at`
+
+Assignment modes:
+
+- `household_anyone`: one household obligation; any active member may complete it once for the period.
+- `assigned_individual`: one selected member is responsible.
+- `per_person`: each selected member has an individual obligation.
+
+## Chore Assignment
+
+Represents the members responsible for `assigned_individual` and `per_person` chores.
+
+Fields:
+
+- `id`
+- `chore_id`
+- `family_member_id`
 - `active`
 - `created_at`
 - `updated_at`
@@ -41,9 +61,12 @@ Fields:
 - `id`
 - `chore_id`
 - `completed_by_member_id`
+- `responsible_member_id`, nullable
 - `device_session_id`, nullable
 - `completed_at`
 - `notes`, nullable
+
+`completed_by_member_id` is the person who tapped complete. `responsible_member_id` is the person whose obligation was satisfied. Household-anyone chores use `responsible_member_id = null`.
 
 ## Device Session
 

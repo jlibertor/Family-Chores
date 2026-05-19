@@ -46,7 +46,8 @@ Implemented beta features:
 - Manage family members and chores
 - Delete family members from active use while preserving history
 - Activate and deactivate chores
-- Assign chores optionally
+- Assign chores as household-anyone, one-person, or per-person tasks
+- Member and kiosk chore lists show chores relevant to the selected member
 - Basic daily and weekly due or overdue behavior
 - Today view
 - Improved confirmation flow

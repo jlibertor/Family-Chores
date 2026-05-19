@@ -29,6 +29,7 @@ The API lives in `worker/` and is implemented as a Cloudflare Worker. It uses a 
 Current endpoints:
 
 - `GET /api/members`
+- `GET /api/members/:id/chores`
 - `GET /api/chores`
 - `GET /api/today`
 - `GET /api/status`
@@ -49,6 +50,7 @@ Parent setup endpoints require the `X-Parent-Pin` header:
 - `GET /api/admin/chores`
 - `POST /api/admin/chores`
 - `PUT /api/admin/chores/:id`
+- `DELETE /api/admin/chores/:id`
 - `GET /api/admin/notes`
 - `POST /api/admin/notes`
 - `PUT /api/admin/notes/:id`
@@ -60,12 +62,19 @@ Frontend routes include operational screens (`/today`, `/member`, `/kiosk`, `/hi
 
 Database migrations live in `database/migrations/`. The target database is Cloudflare D1, which uses SQLite-compatible SQL.
 
-The initial migration creates and seeds:
+The migrations create and seed:
 
 - `family_members`
 - `chores`
+- `chore_assignments`
 - `chore_completions`
 - `device_sessions`
+
+Chores use an assignment mode:
+
+- household chores any member can complete once per period
+- chores assigned to one person
+- per-person chores where each selected person has a separate obligation
 
 ## Deployment Direction
 
