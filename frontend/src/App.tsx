@@ -421,7 +421,7 @@ function App() {
   }
 
   async function deleteMember(member: Member) {
-    if (!window.confirm(`Delete ${member.display_name} from active family members? Their old history will be kept.`)) {
+    if (!window.confirm(`Delete ${member.display_name}? Their old history will be kept, but they will leave setup lists and active app screens.`)) {
       return
     }
 
@@ -465,6 +465,27 @@ function App() {
       setSuccessMessage('Chore saved.')
     } catch (currentError) {
       setError(currentError instanceof Error ? currentError.message : 'Could not save chore.')
+    }
+  }
+
+  async function deleteChore(chore: Chore) {
+    if (!window.confirm(`Delete ${chore.name}? Old completion history will be kept, but this chore will leave setup lists and active app screens.`)) {
+      return
+    }
+
+    setError('')
+
+    try {
+      await api(`/api/admin/chores/${chore.id}`, {
+        method: 'DELETE',
+        headers: { 'X-Parent-Pin': adminPin },
+      })
+
+      setChoreDraft(emptyChoreDraft)
+      await Promise.all([loadAdminData(), refreshHousehold()])
+      setSuccessMessage(`${chore.name} deleted from chores.`)
+    } catch (currentError) {
+      setError(currentError instanceof Error ? currentError.message : 'Could not delete chore.')
     }
   }
 
@@ -741,6 +762,7 @@ function App() {
           onSaveMember={() => void saveMember()}
           onDeleteMember={(member) => void deleteMember(member)}
           onSaveChore={() => void saveChore()}
+          onDeleteChore={(chore) => void deleteChore(chore)}
           onSaveNote={() => void saveNote()}
           onExport={() => void exportHouseholdData()}
         />
@@ -1225,6 +1247,7 @@ function AdminView({
   onSaveMember,
   onDeleteMember,
   onSaveChore,
+  onDeleteChore,
   onSaveNote,
   onExport,
 }: {
@@ -1244,6 +1267,7 @@ function AdminView({
   onSaveMember: () => void
   onDeleteMember: (member: Member) => void
   onSaveChore: () => void
+  onDeleteChore: (chore: Chore) => void
   onSaveNote: () => void
   onExport: () => void
 }) {
@@ -1516,6 +1540,9 @@ function AdminView({
                       }
                     >
                       Edit
+                    </button>
+                    <button type="button" className="danger-action" onClick={() => onDeleteChore(chore)}>
+                      Delete
                     </button>
                   </div>
                 </article>

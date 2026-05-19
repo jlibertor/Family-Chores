@@ -458,6 +458,28 @@ async function deleteMember(db: D1Database, id: number) {
   return json({ ok: true, member: { id, active: 0 } });
 }
 
+async function deleteChore(db: D1Database, id: number) {
+  const chore = await db
+    .prepare("SELECT id FROM chores WHERE id = ?")
+    .bind(id)
+    .first<{ id: number }>();
+
+  if (!chore) {
+    return badRequest("Chore was not found.");
+  }
+
+  await db
+    .prepare(
+      `UPDATE chores
+       SET active = 0, updated_at = datetime('now')
+       WHERE id = ?`,
+    )
+    .bind(id)
+    .run();
+
+  return json({ ok: true, chore: { id, active: 0 } });
+}
+
 async function saveChore(request: Request, db: D1Database, id: number | null) {
   const body = await readJson(request);
   const name = typeof body.name === "string" ? body.name.trim().slice(0, 100) : "";
@@ -646,7 +668,7 @@ export default {
     }
 
     if (request.method === "GET" && url.pathname === "/api/admin/members") {
-      return listMembers(env.DB, true);
+      return listMembers(env.DB);
     }
 
     if (request.method === "POST" && url.pathname === "/api/admin/members") {
@@ -662,7 +684,7 @@ export default {
     }
 
     if (request.method === "GET" && url.pathname === "/api/admin/chores") {
-      return listChores(env.DB, true);
+      return listChores(env.DB);
     }
 
     if (request.method === "POST" && url.pathname === "/api/admin/chores") {
@@ -671,6 +693,10 @@ export default {
 
     if (request.method === "PUT" && choreMatch) {
       return saveChore(request, env.DB, Number(choreMatch[1]));
+    }
+
+    if (request.method === "DELETE" && choreMatch) {
+      return deleteChore(env.DB, Number(choreMatch[1]));
     }
 
     if (request.method === "GET" && url.pathname === "/api/admin/notes") {
