@@ -36,6 +36,18 @@ The Worker exposes a Phase 1 health endpoint at:
 http://127.0.0.1:8787/api/health
 ```
 
+## Local D1
+
+Apply migrations to the local D1 database:
+
+```bash
+npx wrangler d1 migrations apply family-chores --local --config worker/wrangler.toml
+```
+
+The first migration creates the core tables and inserts starter family members and chores.
+
+During local frontend development, Vite proxies `/api` requests to the Worker at `http://127.0.0.1:8787`.
+
 ## Checks
 
 Build both workspaces:

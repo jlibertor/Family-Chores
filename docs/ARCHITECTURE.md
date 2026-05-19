@@ -24,9 +24,9 @@ The frontend should remain mobile-first because the main devices are phones and 
 
 ## API
 
-The API lives in `worker/` and is implemented as a Cloudflare Worker. Phase 1 exposes a simple health endpoint and a placeholder API response so Wrangler can run locally before database wiring exists.
+The API lives in `worker/` and is implemented as a Cloudflare Worker. It uses a D1 binding named `DB`.
 
-Planned Phase 2 endpoints:
+Current endpoints:
 
 - `GET /api/members`
 - `GET /api/chores`
@@ -34,12 +34,13 @@ Planned Phase 2 endpoints:
 - `GET /api/completions/recent`
 - `POST /api/session/select-member`
 - `POST /api/session/kiosk`
+- `GET /api/health`
 
 ## Database
 
 Database migrations live in `database/migrations/`. The target database is Cloudflare D1, which uses SQLite-compatible SQL.
 
-Phase 1 includes the first draft schema for:
+The initial migration creates and seeds:
 
 - `family_members`
 - `chores`

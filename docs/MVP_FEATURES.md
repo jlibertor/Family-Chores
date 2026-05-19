@@ -27,13 +27,14 @@ Not included:
 
 Goal: prove the full path from React to Worker to D1.
 
-Planned features:
+Implemented foundation:
 
 - Seed data for two adults, four children, and sample chores
 - API endpoints for members, chores, completions, recent history, and simple session mode
 - Basic pages for choose mode, member mode, kiosk mode, and history
 - Completing a chore writes a database row
 - History displays recent completions
+- Basic daily and weekly due status is returned with chores
 
 ## Phase 3: Household Beta
 

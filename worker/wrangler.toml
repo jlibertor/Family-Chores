@@ -2,8 +2,8 @@ name = "family-chores-api"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
 
-# Phase 2 will add the real D1 binding after the database is created.
-# [[d1_databases]]
-# binding = "DB"
-# database_name = "family-chores"
-# database_id = "replace-with-cloudflare-d1-database-id"
+[[d1_databases]]
+binding = "DB"
+database_name = "family-chores"
+database_id = "local-family-chores"
+migrations_dir = "../database/migrations"
