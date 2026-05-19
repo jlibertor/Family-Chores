@@ -45,6 +45,7 @@ npx wrangler d1 migrations apply family-chores --local --config worker/wrangler.
 ```
 
 The first migration creates the core tables and inserts starter family members and chores.
+Later migrations add lightweight household convenience fields such as reminder flags and completion points.
 
 During local frontend development, Vite proxies `/api` requests to the Worker at `http://127.0.0.1:8787`.
 

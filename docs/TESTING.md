@@ -37,6 +37,7 @@ The smoke script verifies:
 - active members
 - active chores
 - today endpoint
+- household status endpoint
 - admin PIN gate
 - kiosk session creation
 - completion insert

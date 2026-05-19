@@ -31,6 +31,7 @@ Current endpoints:
 - `GET /api/members`
 - `GET /api/chores`
 - `GET /api/today`
+- `GET /api/status`
 - `POST /api/completions`
 - `GET /api/completions/recent`
 - `POST /api/session/select-member`

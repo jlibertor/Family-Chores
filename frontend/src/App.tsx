@@ -20,6 +20,7 @@ type Chore = {
   assigned_member_id: number | null
   assigned_member_name?: string | null
   alert_if_overdue: 0 | 1
+  needs_reminder: 0 | 1
   active: 0 | 1
   is_due: 0 | 1
   is_overdue: 0 | 1
@@ -34,6 +35,7 @@ type Completion = {
   completed_at: string
   session_mode: 'member' | 'kiosk' | 'admin' | null
   device_label: string | null
+  notes: string | null
 }
 
 type SessionState = {
@@ -47,6 +49,28 @@ type TodayState = {
   due: Chore[]
   overdue: Chore[]
   completedToday: Completion[]
+}
+
+type HouseholdStatus = {
+  weekly: {
+    totalCompleted: number
+    byMember: Array<{
+      member_id: number
+      member_name: string
+      completed_count: number
+      points: number
+    }>
+    mostActive: {
+      member_name: string
+      completed_count: number
+      points: number
+    } | null
+  }
+  reminders: Chore[]
+  suggestions: Array<{
+    chore_id: number
+    message: string
+  }>
 }
 
 type MemberDraft = {
@@ -64,6 +88,7 @@ type ChoreDraft = {
   frequency_type: FrequencyType
   assigned_member_id: number | ''
   alert_if_overdue: 0 | 1
+  needs_reminder: 0 | 1
   active: 0 | 1
 }
 
@@ -89,6 +114,7 @@ const emptyChoreDraft: ChoreDraft = {
   frequency_type: 'daily',
   assigned_member_id: '',
   alert_if_overdue: 0,
+  needs_reminder: 0,
   active: 1,
 }
 
@@ -148,6 +174,11 @@ function App() {
   const [chores, setChores] = useState<Chore[]>([])
   const [history, setHistory] = useState<Completion[]>([])
   const [today, setToday] = useState<TodayState>({ due: [], overdue: [], completedToday: [] })
+  const [status, setStatus] = useState<HouseholdStatus>({
+    weekly: { totalCompleted: 0, byMember: [], mostActive: null },
+    reminders: [],
+    suggestions: [],
+  })
   const [loadState, setLoadState] = useState<LoadState>('idle')
   const [error, setError] = useState('')
   const [selectedMemberId, setSelectedMemberId] = useState<number | null>(() => {
@@ -165,6 +196,11 @@ function App() {
   const [memberDraft, setMemberDraft] = useState<MemberDraft>(emptyMemberDraft)
   const [choreDraft, setChoreDraft] = useState<ChoreDraft>(emptyChoreDraft)
   const [submitting, setSubmitting] = useState(false)
+  const [completionNote, setCompletionNote] = useState('')
+  const [notificationsEnabled, setNotificationsEnabled] = useState(
+    () => 'Notification' in window && Notification.permission === 'granted',
+  )
+  const [currentTime, setCurrentTime] = useState(() => new Date())
 
   const selectedMember = useMemo(
     () => members.find((member) => member.id === selectedMemberId) ?? null,
@@ -190,10 +226,11 @@ function App() {
     setError('')
 
     try {
-      const [memberData, choreData, todayData, historyData] = await Promise.all([
+      const [memberData, choreData, todayData, statusData, historyData] = await Promise.all([
         api<{ ok: boolean; members: Member[] }>('/api/members'),
         api<{ ok: boolean; chores: Chore[] }>('/api/chores'),
         api<TodayState & { ok: boolean }>('/api/today'),
+        api<HouseholdStatus & { ok: boolean }>('/api/status'),
         api<{ ok: boolean; completions: Completion[] }>('/api/completions/recent'),
       ])
 
@@ -203,6 +240,11 @@ function App() {
         due: todayData.due,
         overdue: todayData.overdue,
         completedToday: todayData.completedToday,
+      })
+      setStatus({
+        weekly: statusData.weekly,
+        reminders: statusData.reminders,
+        suggestions: statusData.suggestions,
       })
       setHistory(historyData.completions)
       setLoadState('ready')
@@ -228,13 +270,17 @@ function App() {
 
   useEffect(() => {
     void Promise.resolve().then(() => refreshHousehold())
+    const clock = window.setInterval(() => setCurrentTime(new Date()), 30_000)
 
     const onPopState = () => {
       setRoute(isKnownRoute(window.location.pathname) ? window.location.pathname : '/today')
     }
 
     window.addEventListener('popstate', onPopState)
-    return () => window.removeEventListener('popstate', onPopState)
+    return () => {
+      window.clearInterval(clock)
+      window.removeEventListener('popstate', onPopState)
+    }
   }, [])
 
   async function chooseMemberDevice(memberId: number) {
@@ -289,14 +335,17 @@ function App() {
           memberId,
           choreId: chore.id,
           sessionMode: mode,
-          deviceSessionId: session?.mode === mode ? session.id : undefined,
-          deviceLabel: session?.deviceLabel,
-        }),
-      })
+        deviceSessionId: session?.mode === mode ? session.id : undefined,
+        deviceLabel: session?.deviceLabel,
+        notes: completionNote,
+      }),
+    })
 
       const member = members.find((item) => item.id === memberId)
       setSuccessMessage(`${member?.display_name ?? 'Someone'} completed ${chore.name}.`)
+      maybeShowCompletionNotification(member?.display_name ?? 'Someone', chore.name)
       setPendingChore(null)
+      setCompletionNote('')
       await refreshHousehold()
 
       if (mode === 'kiosk') {
@@ -360,6 +409,27 @@ function App() {
     }
   }
 
+  async function enableNotifications() {
+    if (!('Notification' in window)) {
+      setError('This browser does not support notifications.')
+      return
+    }
+
+    const permission = await Notification.requestPermission()
+    setNotificationsEnabled(permission === 'granted')
+    if (permission === 'granted') {
+      new Notification('Family Chores reminders enabled')
+    }
+  }
+
+  function maybeShowCompletionNotification(memberName: string, choreName: string) {
+    if (notificationsEnabled && 'Notification' in window && Notification.permission === 'granted') {
+      new Notification('Chore completed', {
+        body: `${memberName} completed ${choreName}.`,
+      })
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="top-bar">
@@ -380,7 +450,14 @@ function App() {
       {successMessage && <p className="notice success">{successMessage}</p>}
 
       {route === '/today' && (
-        <TodayView today={today} chores={chores} onStart={() => navigate('/choose-mode')} />
+        <TodayView
+          today={today}
+          chores={chores}
+          status={status}
+          notificationsEnabled={notificationsEnabled}
+          onEnableNotifications={() => void enableNotifications()}
+          onStart={() => navigate('/choose-mode')}
+        />
       )}
 
       {route === '/choose-mode' && (
@@ -438,9 +515,14 @@ function App() {
               pendingChore={pendingChore}
               memberName={selectedMember.display_name}
               onPick={setPendingChore}
-              onCancel={() => setPendingChore(null)}
+              onCancel={() => {
+                setPendingChore(null)
+                setCompletionNote('')
+              }}
               onConfirm={(chore) => void submitCompletion(selectedMember.id, chore, 'member')}
               submitting={submitting}
+              note={completionNote}
+              onNoteChange={setCompletionNote}
             />
           )}
         </section>
@@ -454,13 +536,16 @@ function App() {
           </div>
 
           {!kioskMember && (
-            <div className="button-grid large">
-              {members.map((member) => (
-                <button key={member.id} type="button" onClick={() => setKioskMemberId(member.id)}>
-                  {member.display_name}
-                </button>
-              ))}
-            </div>
+            <>
+              <KioskStatus today={today} status={status} currentTime={currentTime} />
+              <div className="button-grid large">
+                {members.map((member) => (
+                  <button key={member.id} type="button" onClick={() => setKioskMemberId(member.id)}>
+                    {member.display_name}
+                  </button>
+                ))}
+              </div>
+            </>
           )}
 
           {kioskMember && (
@@ -474,9 +559,14 @@ function App() {
                 pendingChore={pendingChore}
                 memberName={kioskMember.display_name}
                 onPick={setPendingChore}
-                onCancel={() => setPendingChore(null)}
+                onCancel={() => {
+                  setPendingChore(null)
+                  setCompletionNote('')
+                }}
                 onConfirm={(chore) => void submitCompletion(kioskMember.id, chore, 'kiosk')}
                 submitting={submitting}
+                note={completionNote}
+                onNoteChange={setCompletionNote}
               />
             </>
           )}
@@ -508,10 +598,16 @@ function App() {
 function TodayView({
   today,
   chores,
+  status,
+  notificationsEnabled,
+  onEnableNotifications,
   onStart,
 }: {
   today: TodayState
   chores: Chore[]
+  status: HouseholdStatus
+  notificationsEnabled: boolean
+  onEnableNotifications: () => void
   onStart: () => void
 }) {
   return (
@@ -539,6 +635,29 @@ function TodayView({
       <button type="button" className="primary-action" onClick={onStart}>
         Record a chore
       </button>
+
+      <section className="panel status-panel">
+        <h2>This week</h2>
+        <div className="status-grid">
+          <div>
+            <strong>{status.weekly.totalCompleted}</strong>
+            <span>chores completed</span>
+          </div>
+          <div>
+            <strong>{status.weekly.mostActive?.member_name ?? 'None yet'}</strong>
+            <span>most active helper</span>
+          </div>
+        </div>
+        <div className="suggestion-list">
+          {status.suggestions.length === 0 && <p className="empty-state">No reminder suggestions right now.</p>}
+          {status.suggestions.map((suggestion) => (
+            <p key={suggestion.chore_id}>{suggestion.message}</p>
+          ))}
+        </div>
+        <button type="button" className="secondary-action" onClick={onEnableNotifications}>
+          {notificationsEnabled ? 'Browser reminders enabled' : 'Enable browser reminders'}
+        </button>
+      </section>
 
       <div className="chores-layout">
         <ReadOnlyChoreSection title="Overdue" chores={today.overdue} emptyText="Nothing overdue." />
@@ -569,6 +688,8 @@ function ChorePicker({
   onCancel,
   onConfirm,
   submitting,
+  note,
+  onNoteChange,
 }: {
   dueChores: Chore[]
   otherChores: Chore[]
@@ -578,6 +699,8 @@ function ChorePicker({
   onCancel: () => void
   onConfirm: (chore: Chore) => void
   submitting: boolean
+  note: string
+  onNoteChange: (note: string) => void
 }) {
   if (pendingChore) {
     return (
@@ -585,6 +708,14 @@ function ChorePicker({
         <p>{memberName}</p>
         <h2>{pendingChore.name}</h2>
         <span>{frequencyLabel(pendingChore.frequency_type)}</span>
+        <label>
+          Note
+          <textarea
+            placeholder="Optional note"
+            value={note}
+            onChange={(event) => onNoteChange(event.target.value)}
+          />
+        </label>
         <div className="action-row">
           <button type="button" className="secondary-action" onClick={onCancel}>
             Cancel
@@ -607,6 +738,37 @@ function ChorePicker({
       <ChoreSection title="Due now" chores={dueChores} onPick={onPick} />
       <ChoreSection title="Other chores" chores={otherChores} onPick={onPick} />
     </div>
+  )
+}
+
+function KioskStatus({
+  today,
+  status,
+  currentTime,
+}: {
+  today: TodayState
+  status: HouseholdStatus
+  currentTime: Date
+}) {
+  return (
+    <section className="kiosk-status">
+      <div>
+        <strong>{formatClock(currentTime)}</strong>
+        <span>{today.completedToday.length} done today</span>
+      </div>
+      <div>
+        <strong>{today.due.length}</strong>
+        <span>due</span>
+      </div>
+      <div>
+        <strong>{today.overdue.length}</strong>
+        <span>overdue</span>
+      </div>
+      <div>
+        <strong>{status.weekly.totalCompleted}</strong>
+        <span>this week</span>
+      </div>
+    </section>
   )
 }
 
@@ -700,6 +862,7 @@ function HistoryItem({ completion }: { completion: Completion }) {
         <span>{formatTime(completion.completed_at)}</span>
         <span>{completion.device_label ?? completion.session_mode ?? 'Unknown device'}</span>
       </div>
+      {completion.notes && <p className="history-note">{completion.notes}</p>}
     </article>
   )
 }
@@ -867,6 +1030,14 @@ function AdminView({
           <label className="check-row">
             <input
               type="checkbox"
+              checked={choreDraft.needs_reminder === 1}
+              onChange={(event) => onChoreDraftChange({ ...choreDraft, needs_reminder: event.target.checked ? 1 : 0 })}
+            />
+            Needs reminder
+          </label>
+          <label className="check-row">
+            <input
+              type="checkbox"
               checked={choreDraft.active === 1}
               onChange={(event) => onChoreDraftChange({ ...choreDraft, active: event.target.checked ? 1 : 0 })}
             />
@@ -910,6 +1081,7 @@ function AdminView({
                 <span>
                   {frequencyLabel(chore.frequency_type)} · {chore.active ? 'active' : 'inactive'}
                   {chore.assigned_member_name ? ` · ${chore.assigned_member_name}` : ''}
+                  {chore.needs_reminder ? ' · reminder' : ''}
                 </span>
                 <button
                   type="button"
@@ -921,6 +1093,7 @@ function AdminView({
                       frequency_type: chore.frequency_type,
                       assigned_member_id: chore.assigned_member_id ?? '',
                       alert_if_overdue: chore.alert_if_overdue,
+                      needs_reminder: chore.needs_reminder,
                       active: chore.active,
                     })
                   }
@@ -968,6 +1141,13 @@ function formatTime(value: string) {
     hour: 'numeric',
     minute: '2-digit',
   }).format(new Date(`${value}Z`))
+}
+
+function formatClock(value: Date) {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(value)
 }
 
 function relativeDate(value: string) {

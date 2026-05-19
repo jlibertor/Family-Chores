@@ -53,9 +53,19 @@ Implemented beta features:
 
 ## Deferred Features
 
+Still deferred:
+
 - SMS, email, and push alerts
 - Allowance tracking
 - Advanced recurrence rules
 - OAuth or serious authentication
 - Multi-household support
 - SaaS billing
+
+Lightweight convenience now included:
+
+- Optional completion notes
+- Simple browser reminder prompt
+- Reminder flag for chores
+- Weekly household status
+- Kiosk status summary

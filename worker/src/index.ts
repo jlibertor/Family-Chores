@@ -115,6 +115,7 @@ async function listChores(db: D1Database, includeInactive = false) {
         c.assigned_member_id,
         assignee.display_name AS assigned_member_name,
         c.alert_if_overdue,
+        COALESCE(c.needs_reminder, 0) AS needs_reminder,
         c.active,
         c.created_at,
         c.updated_at,
@@ -190,6 +191,76 @@ async function todayView(db: D1Database) {
   });
 }
 
+async function householdStatus(db: D1Database) {
+  const { results: weeklyRows } = await db
+    .prepare(
+      `SELECT
+        fm.id AS member_id,
+        fm.display_name AS member_name,
+        COUNT(cc.id) AS completed_count,
+        COALESCE(SUM(cc.points), COUNT(cc.id)) AS points
+       FROM family_members fm
+       LEFT JOIN chore_completions cc
+        ON cc.completed_by_member_id = fm.id
+        AND strftime('%Y-%W', cc.completed_at, 'localtime') = strftime('%Y-%W', 'now', 'localtime')
+       WHERE fm.active = 1
+       GROUP BY fm.id
+       ORDER BY completed_count DESC, fm.sort_order`,
+    )
+    .all();
+
+  const { results: reminderRows } = await db
+    .prepare(
+      `SELECT
+        c.id,
+        c.name,
+        c.frequency_type,
+        c.needs_reminder,
+        c.alert_if_overdue,
+        lc.completed_at AS last_completed_at,
+        fm.display_name AS last_completed_by,
+        CASE
+          WHEN c.frequency_type = 'daily'
+            THEN lc.completed_at IS NULL OR date(lc.completed_at, 'localtime') < date('now', 'localtime')
+          WHEN c.frequency_type = 'weekly'
+            THEN lc.completed_at IS NULL OR strftime('%Y-%W', lc.completed_at, 'localtime') < strftime('%Y-%W', 'now', 'localtime')
+          ELSE 0
+        END AS is_due
+       FROM chores c
+       LEFT JOIN (
+        SELECT chore_id, completed_by_member_id, MAX(completed_at) AS completed_at
+        FROM chore_completions
+        GROUP BY chore_id
+       ) lc ON lc.chore_id = c.id
+       LEFT JOIN family_members fm ON fm.id = lc.completed_by_member_id
+       WHERE c.active = 1
+        AND (c.needs_reminder = 1 OR c.alert_if_overdue = 1)
+       ORDER BY is_due DESC, c.name
+       LIMIT 8`,
+    )
+    .all();
+
+  const totalCompletedThisWeek = weeklyRows.reduce((total, row) => total + Number(row.completed_count ?? 0), 0);
+  const mostActive = weeklyRows.find((row) => Number(row.completed_count ?? 0) > 0) ?? null;
+  const suggestions = reminderRows
+    .filter((row) => row.is_due === 1)
+    .map((row) => ({
+      chore_id: row.id,
+      message: `${row.name} is due${row.last_completed_by ? `; last completed by ${row.last_completed_by}` : ""}.`,
+    }));
+
+  return json({
+    ok: true,
+    weekly: {
+      totalCompleted: totalCompletedThisWeek,
+      byMember: weeklyRows,
+      mostActive,
+    },
+    reminders: reminderRows,
+    suggestions,
+  });
+}
+
 async function recordCompletion(request: Request, db: D1Database) {
   const body = await readJson(request);
   const memberId = asPositiveInteger(body.memberId);
@@ -198,6 +269,7 @@ async function recordCompletion(request: Request, db: D1Database) {
   const sessionMode = isSessionMode(body.sessionMode) ? body.sessionMode : "member";
   const deviceLabel = typeof body.deviceLabel === "string" ? body.deviceLabel.slice(0, 80) : null;
   const notes = typeof body.notes === "string" && body.notes.trim() ? body.notes.trim() : null;
+  const points = 1;
 
   if (!memberId || !choreId) {
     return badRequest("memberId and choreId are required.");
@@ -222,10 +294,10 @@ async function recordCompletion(request: Request, db: D1Database) {
   const result = await db
     .prepare(
       `INSERT INTO chore_completions
-        (chore_id, completed_by_member_id, device_session_id, notes)
-       VALUES (?, ?, ?, ?)`,
+        (chore_id, completed_by_member_id, device_session_id, notes, points)
+       VALUES (?, ?, ?, ?, ?)`,
     )
-    .bind(choreId, memberId, completionSessionId, notes)
+    .bind(choreId, memberId, completionSessionId, notes, points)
     .run();
 
   return json({
@@ -350,6 +422,7 @@ async function saveChore(request: Request, db: D1Database, id: number | null) {
   const frequencyType = isFrequencyType(body.frequency_type) ? body.frequency_type : null;
   const assignedMemberId = asPositiveInteger(body.assigned_member_id);
   const alertIfOverdue = asActiveFlag(body.alert_if_overdue, 0);
+  const needsReminder = asActiveFlag(body.needs_reminder, 0);
   const active = asActiveFlag(body.active);
 
   if (!name || !frequencyType) {
@@ -370,28 +443,29 @@ async function saveChore(request: Request, db: D1Database, id: number | null) {
              frequency_type = ?,
              assigned_member_id = ?,
              alert_if_overdue = ?,
+             needs_reminder = ?,
              active = ?,
              updated_at = datetime('now')
          WHERE id = ?`,
       )
-      .bind(name, description, frequencyType, assignedMemberId, alertIfOverdue, active, id)
+      .bind(name, description, frequencyType, assignedMemberId, alertIfOverdue, needsReminder, active, id)
       .run();
 
-    return json({ ok: true, chore: { id, name, description, frequency_type: frequencyType, assigned_member_id: assignedMemberId, alert_if_overdue: alertIfOverdue, active } });
+    return json({ ok: true, chore: { id, name, description, frequency_type: frequencyType, assigned_member_id: assignedMemberId, alert_if_overdue: alertIfOverdue, needs_reminder: needsReminder, active } });
   }
 
   const result = await db
     .prepare(
       `INSERT INTO chores
-        (name, description, frequency_type, assigned_member_id, alert_if_overdue, active)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+        (name, description, frequency_type, assigned_member_id, alert_if_overdue, needs_reminder, active)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
-    .bind(name, description, frequencyType, assignedMemberId, alertIfOverdue, active)
+    .bind(name, description, frequencyType, assignedMemberId, alertIfOverdue, needsReminder, active)
     .run();
 
   return json({
     ok: true,
-    chore: { id: result.meta.last_row_id, name, description, frequency_type: frequencyType, assigned_member_id: assignedMemberId, alert_if_overdue: alertIfOverdue, active },
+    chore: { id: result.meta.last_row_id, name, description, frequency_type: frequencyType, assigned_member_id: assignedMemberId, alert_if_overdue: alertIfOverdue, needs_reminder: needsReminder, active },
   });
 }
 
@@ -423,6 +497,10 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/api/today") {
       return todayView(env.DB);
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/status") {
+      return householdStatus(env.DB);
     }
 
     if (request.method === "POST" && url.pathname === "/api/completions") {

@@ -31,6 +31,11 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
 input,
 select,
 textarea {
@@ -173,6 +178,53 @@ button:focus-visible {
   gap: 10px;
 }
 
+.status-grid,
+.kiosk-status {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.status-grid div,
+.kiosk-status div {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--soft);
+  padding: 12px;
+}
+
+.status-grid strong,
+.kiosk-status strong {
+  color: var(--heading);
+  font-size: 1.35rem;
+  line-height: 1.1;
+}
+
+.status-grid span,
+.kiosk-status span {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.suggestion-list {
+  display: grid;
+  gap: 8px;
+}
+
+.suggestion-list p {
+  border-left: 4px solid var(--primary);
+  padding-left: 10px;
+}
+
+.kiosk-status {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 12px;
+}
+
 .today-summary div {
   display: grid;
   justify-items: center;
@@ -238,6 +290,12 @@ button:focus-visible {
   flex-wrap: wrap;
   gap: 8px;
   justify-content: space-between;
+}
+
+.history-note {
+  border-left: 4px solid var(--border);
+  color: var(--text);
+  padding-left: 10px;
 }
 
 .history-meta {
