@@ -19,7 +19,11 @@ Family-Chores/
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── DATA_MODEL.md
-│   └── MVP_FEATURES.md
+│   ├── MVP_FEATURES.md
+│   ├── SETUP.md
+│   └── handoff/
+│       ├── open/
+│       └── completed/
 ├── frontend/
 │   └── React + Vite app
 ├── worker/
@@ -63,6 +67,17 @@ Run lint checks:
 ```bash
 npm run lint
 ```
+
+See [docs/SETUP.md](docs/SETUP.md) for workspace-specific setup notes.
+
+## Documentation
+
+Project documentation lives in `docs/`. Implementation handoffs live under `docs/handoff/` with only two states:
+
+- `open/` for active or pending Codex work
+- `completed/` for accepted historical handoffs
+
+Move handoff files from `open` to `completed` after the work is reviewed and accepted. Do not duplicate handoff files between states.
 
 ## Phase 1 Scope
 

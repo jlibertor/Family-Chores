@@ -56,6 +56,19 @@ The intended deployment model is:
 
 No secrets should be committed. Environment-specific values should be configured through Cloudflare or local `.dev.vars` files.
 
+## Documentation Structure
+
+Project documentation stays under `docs/` and should remain concise:
+
+- `ARCHITECTURE.md`: system shape and deployment direction
+- `DATA_MODEL.md`: database entities and relationships
+- `MVP_FEATURES.md`: phased feature scope
+- `SETUP.md`: local setup and development commands
+- `handoff/open/`: active Codex implementation handoffs
+- `handoff/completed/`: accepted historical handoffs
+
+The handoff system intentionally has only two states: `open` and `completed`.
+
 ## Explicit Non-Goals For Early Phases
 
 - SQL Server, IIS, Docker, or dedicated VMs
