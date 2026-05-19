@@ -75,6 +75,8 @@ Project documentation stays under `docs/` and should remain concise:
 - `DATA_MODEL.md`: database entities and relationships
 - `MVP_FEATURES.md`: phased feature scope
 - `SETUP.md`: local setup and development commands
+- `TESTING.md`: lightweight validation checks
+- `DEPLOYMENT.md`: Cloudflare deployment notes
 - `handoff/open/`: active Codex implementation handoffs
 - `handoff/completed/`: accepted historical handoffs
 

@@ -39,6 +39,14 @@ npm run build
 npm run deploy:frontend
 ```
 
+## Smoke Check
+
+After deploying, run the smoke checks against the deployed Worker:
+
+```bash
+API_BASE_URL=https://your-worker.example.workers.dev PARENT_PIN=your-pin npm run smoke
+```
+
 ## Notes
 
 - The frontend uses relative `/api` paths.

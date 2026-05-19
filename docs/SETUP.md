@@ -76,6 +76,18 @@ Run lint checks:
 npm run lint
 ```
 
+Run API smoke checks while the Worker is running locally:
+
+```bash
+npm run smoke
+```
+
+Use a different API URL or parent PIN when needed:
+
+```bash
+API_BASE_URL=https://your-worker.example.workers.dev PARENT_PIN=1234 npm run smoke
+```
+
 ## Deployment
 
 Build before deploying:

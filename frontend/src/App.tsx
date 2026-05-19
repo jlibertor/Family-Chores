@@ -96,22 +96,36 @@ function isKnownRoute(pathname: string) {
   return routes.includes(pathname as (typeof routes)[number])
 }
 
-async function api<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
-    ...options,
-  })
+async function api<T>(path: string, options?: RequestInit, attempts = 2): Promise<T> {
+  let lastError: unknown
 
-  const body = (await response.json()) as T & { error?: string }
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetch(path, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...options?.headers,
+        },
+        ...options,
+      })
 
-  if (!response.ok) {
-    throw new Error(body.error ?? 'Request failed.')
+      const body = (await response.json()) as T & { error?: string }
+
+      if (!response.ok) {
+        throw new Error(body.error ?? 'Request failed.')
+      }
+
+      return body
+    } catch (currentError) {
+      lastError = currentError
+      if (attempt === attempts || options?.method) {
+        break
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 350))
+    }
   }
 
-  return body
+  throw lastError instanceof Error ? lastError : new Error('Request failed.')
 }
 
 function getStoredSession() {
@@ -150,6 +164,7 @@ function App() {
   const [adminChores, setAdminChores] = useState<Chore[]>([])
   const [memberDraft, setMemberDraft] = useState<MemberDraft>(emptyMemberDraft)
   const [choreDraft, setChoreDraft] = useState<ChoreDraft>(emptyChoreDraft)
+  const [submitting, setSubmitting] = useState(false)
 
   const selectedMember = useMemo(
     () => members.find((member) => member.id === selectedMemberId) ?? null,
@@ -223,54 +238,74 @@ function App() {
   }, [])
 
   async function chooseMemberDevice(memberId: number) {
-    const member = members.find((item) => item.id === memberId)
-    const data = await api<{ ok: boolean; session: SessionState }>('/api/session/select-member', {
-      method: 'POST',
-      body: JSON.stringify({
-        memberId,
-        deviceLabel: member ? `${member.display_name} Device` : 'Personal Device',
-      }),
-    })
+    setError('')
 
-    localStorage.setItem(memberKey, String(memberId))
-    localStorage.setItem(sessionKey, JSON.stringify(data.session))
-    setSelectedMemberId(memberId)
-    setSession(data.session)
-    navigate('/member')
+    try {
+      const member = members.find((item) => item.id === memberId)
+      const data = await api<{ ok: boolean; session: SessionState }>('/api/session/select-member', {
+        method: 'POST',
+        body: JSON.stringify({
+          memberId,
+          deviceLabel: member ? `${member.display_name} Device` : 'Personal Device',
+        }),
+      })
+
+      localStorage.setItem(memberKey, String(memberId))
+      localStorage.setItem(sessionKey, JSON.stringify(data.session))
+      setSelectedMemberId(memberId)
+      setSession(data.session)
+      navigate('/member')
+    } catch (currentError) {
+      setError(currentError instanceof Error ? currentError.message : 'Could not select this member.')
+    }
   }
 
   async function chooseKioskDevice() {
-    const data = await api<{ ok: boolean; session: SessionState }>('/api/session/kiosk', {
-      method: 'POST',
-      body: JSON.stringify({ deviceLabel: 'Kitchen Tablet' }),
-    })
+    setError('')
 
-    localStorage.setItem(sessionKey, JSON.stringify(data.session))
-    setSession(data.session)
-    setKioskMemberId(null)
-    navigate('/kiosk')
+    try {
+      const data = await api<{ ok: boolean; session: SessionState }>('/api/session/kiosk', {
+        method: 'POST',
+        body: JSON.stringify({ deviceLabel: 'Kitchen Tablet' }),
+      })
+
+      localStorage.setItem(sessionKey, JSON.stringify(data.session))
+      setSession(data.session)
+      setKioskMemberId(null)
+      navigate('/kiosk')
+    } catch (currentError) {
+      setError(currentError instanceof Error ? currentError.message : 'Could not start kiosk mode.')
+    }
   }
 
   async function submitCompletion(memberId: number, chore: Chore, mode: 'member' | 'kiosk') {
     setError('')
-    await api('/api/completions', {
-      method: 'POST',
-      body: JSON.stringify({
-        memberId,
-        choreId: chore.id,
-        sessionMode: mode,
-        deviceSessionId: session?.mode === mode ? session.id : undefined,
-        deviceLabel: session?.deviceLabel,
-      }),
-    })
+    setSubmitting(true)
 
-    const member = members.find((item) => item.id === memberId)
-    setSuccessMessage(`${member?.display_name ?? 'Someone'} completed ${chore.name}.`)
-    setPendingChore(null)
-    await refreshHousehold()
+    try {
+      await api('/api/completions', {
+        method: 'POST',
+        body: JSON.stringify({
+          memberId,
+          choreId: chore.id,
+          sessionMode: mode,
+          deviceSessionId: session?.mode === mode ? session.id : undefined,
+          deviceLabel: session?.deviceLabel,
+        }),
+      })
 
-    if (mode === 'kiosk') {
-      setKioskMemberId(null)
+      const member = members.find((item) => item.id === memberId)
+      setSuccessMessage(`${member?.display_name ?? 'Someone'} completed ${chore.name}.`)
+      setPendingChore(null)
+      await refreshHousehold()
+
+      if (mode === 'kiosk') {
+        setKioskMemberId(null)
+      }
+    } catch (currentError) {
+      setError(currentError instanceof Error ? currentError.message : 'Could not save that completion.')
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -285,30 +320,44 @@ function App() {
   }
 
   async function saveMember() {
-    const method = memberDraft.id ? 'PUT' : 'POST'
-    const path = memberDraft.id ? `/api/admin/members/${memberDraft.id}` : '/api/admin/members'
-    await api(path, {
-      method,
-      headers: { 'X-Parent-Pin': adminPin },
-      body: JSON.stringify(memberDraft),
-    })
-    setMemberDraft(emptyMemberDraft)
-    await Promise.all([loadAdminData(), refreshHousehold()])
+    setError('')
+
+    try {
+      const method = memberDraft.id ? 'PUT' : 'POST'
+      const path = memberDraft.id ? `/api/admin/members/${memberDraft.id}` : '/api/admin/members'
+      await api(path, {
+        method,
+        headers: { 'X-Parent-Pin': adminPin },
+        body: JSON.stringify(memberDraft),
+      })
+      setMemberDraft(emptyMemberDraft)
+      await Promise.all([loadAdminData(), refreshHousehold()])
+      setSuccessMessage('Family member saved.')
+    } catch (currentError) {
+      setError(currentError instanceof Error ? currentError.message : 'Could not save family member.')
+    }
   }
 
   async function saveChore() {
-    const method = choreDraft.id ? 'PUT' : 'POST'
-    const path = choreDraft.id ? `/api/admin/chores/${choreDraft.id}` : '/api/admin/chores'
-    await api(path, {
-      method,
-      headers: { 'X-Parent-Pin': adminPin },
-      body: JSON.stringify({
-        ...choreDraft,
-        assigned_member_id: choreDraft.assigned_member_id === '' ? null : choreDraft.assigned_member_id,
-      }),
-    })
-    setChoreDraft(emptyChoreDraft)
-    await Promise.all([loadAdminData(), refreshHousehold()])
+    setError('')
+
+    try {
+      const method = choreDraft.id ? 'PUT' : 'POST'
+      const path = choreDraft.id ? `/api/admin/chores/${choreDraft.id}` : '/api/admin/chores'
+      await api(path, {
+        method,
+        headers: { 'X-Parent-Pin': adminPin },
+        body: JSON.stringify({
+          ...choreDraft,
+          assigned_member_id: choreDraft.assigned_member_id === '' ? null : choreDraft.assigned_member_id,
+        }),
+      })
+      setChoreDraft(emptyChoreDraft)
+      await Promise.all([loadAdminData(), refreshHousehold()])
+      setSuccessMessage('Chore saved.')
+    } catch (currentError) {
+      setError(currentError instanceof Error ? currentError.message : 'Could not save chore.')
+    }
   }
 
   return (
@@ -391,6 +440,7 @@ function App() {
               onPick={setPendingChore}
               onCancel={() => setPendingChore(null)}
               onConfirm={(chore) => void submitCompletion(selectedMember.id, chore, 'member')}
+              submitting={submitting}
             />
           )}
         </section>
@@ -426,6 +476,7 @@ function App() {
                 onPick={setPendingChore}
                 onCancel={() => setPendingChore(null)}
                 onConfirm={(chore) => void submitCompletion(kioskMember.id, chore, 'kiosk')}
+                submitting={submitting}
               />
             </>
           )}
@@ -517,6 +568,7 @@ function ChorePicker({
   onPick,
   onCancel,
   onConfirm,
+  submitting,
 }: {
   dueChores: Chore[]
   otherChores: Chore[]
@@ -525,6 +577,7 @@ function ChorePicker({
   onPick: (chore: Chore) => void
   onCancel: () => void
   onConfirm: (chore: Chore) => void
+  submitting: boolean
 }) {
   if (pendingChore) {
     return (
@@ -536,8 +589,13 @@ function ChorePicker({
           <button type="button" className="secondary-action" onClick={onCancel}>
             Cancel
           </button>
-          <button type="button" className="primary-action" onClick={() => onConfirm(pendingChore)}>
-            Confirm complete
+          <button
+            type="button"
+            className="primary-action"
+            disabled={submitting}
+            onClick={() => onConfirm(pendingChore)}
+          >
+            {submitting ? 'Saving...' : 'Confirm complete'}
           </button>
         </div>
       </section>
