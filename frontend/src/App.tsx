@@ -1247,6 +1247,8 @@ function AdminView({
   onSaveNote: () => void
   onExport: () => void
 }) {
+  const [section, setSection] = useState<'menu' | 'members' | 'chores' | 'notes' | 'backup'>('menu')
+
   if (!unlocked) {
     return (
       <section className="screen narrow">
@@ -1273,180 +1275,244 @@ function AdminView({
     )
   }
 
+  if (section === 'menu') {
+    return (
+      <section className="screen">
+        <div className="screen-heading">
+          <p className="eyebrow">Parent setup</p>
+          <h1>What do you want to manage?</h1>
+        </div>
+        <div className="setup-tile-grid">
+          <button type="button" onClick={() => setSection('members')}>
+            <strong>Family members</strong>
+            <span>Add, edit, delete, reorder, and activate people.</span>
+          </button>
+          <button type="button" onClick={() => setSection('chores')}>
+            <strong>Chores</strong>
+            <span>Create chores, assign them, and set frequency.</span>
+          </button>
+          <button type="button" onClick={() => setSection('backup')}>
+            <strong>Backup</strong>
+            <span>Download a lightweight household export.</span>
+          </button>
+          <button type="button" onClick={() => setSection('notes')}>
+            <strong>Notes</strong>
+            <span>Manage shared notes, reminders, and shopping items.</span>
+          </button>
+        </div>
+      </section>
+    )
+  }
+
   return (
     <section className="screen">
       <div className="screen-heading">
         <p className="eyebrow">Parent setup</p>
-        <h1>Manage household</h1>
+        <h1>{setupSectionTitle(section)}</h1>
       </div>
+      <button type="button" className="secondary-action setup-back" onClick={() => setSection('menu')}>
+        Back to setup
+      </button>
 
-      <div className="admin-layout">
-        <section className="panel">
-          <h2>{memberDraft.id ? 'Edit family member' : 'Add family member'}</h2>
-          <label>
-            Display name
-            <input
-              value={memberDraft.display_name}
-              onChange={(event) => onMemberDraftChange({ ...memberDraft, display_name: event.target.value })}
-            />
-          </label>
-          <label>
-            Type
-            <select
-              value={memberDraft.member_type}
-              onChange={(event) => onMemberDraftChange({ ...memberDraft, member_type: event.target.value as MemberType })}
-            >
-              <option value="adult">Adult</option>
-              <option value="child">Child</option>
-            </select>
-          </label>
-          <label>
-            Sort order
-            <input
-              type="number"
-              value={memberDraft.sort_order}
-              onChange={(event) => onMemberDraftChange({ ...memberDraft, sort_order: Number(event.target.value) })}
-            />
-          </label>
-          <label className="check-row">
-            <input
-              type="checkbox"
-              checked={memberDraft.active === 1}
-              onChange={(event) => onMemberDraftChange({ ...memberDraft, active: event.target.checked ? 1 : 0 })}
-            />
-            Active
-          </label>
-          <div className="action-row">
-            <button type="button" className="primary-action" onClick={onSaveMember}>
-              Save member
-            </button>
-            <button type="button" className="secondary-action" onClick={() => onMemberDraftChange(emptyMemberDraft)}>
-              New
-            </button>
-          </div>
-        </section>
+      {section === 'members' && (
+        <>
+          <section className="panel setup-form-panel">
+            <h2>{memberDraft.id ? 'Edit family member' : 'Add family member'}</h2>
+            <label>
+              Display name
+              <input
+                value={memberDraft.display_name}
+                onChange={(event) => onMemberDraftChange({ ...memberDraft, display_name: event.target.value })}
+              />
+            </label>
+            <label>
+              Type
+              <select
+                value={memberDraft.member_type}
+                onChange={(event) => onMemberDraftChange({ ...memberDraft, member_type: event.target.value as MemberType })}
+              >
+                <option value="adult">Adult</option>
+                <option value="child">Child</option>
+              </select>
+            </label>
+            <label>
+              Sort order
+              <input
+                type="number"
+                value={memberDraft.sort_order}
+                onChange={(event) => onMemberDraftChange({ ...memberDraft, sort_order: Number(event.target.value) })}
+              />
+            </label>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={memberDraft.active === 1}
+                onChange={(event) => onMemberDraftChange({ ...memberDraft, active: event.target.checked ? 1 : 0 })}
+              />
+              Active
+            </label>
+            <div className="action-row">
+              <button type="button" className="primary-action" onClick={onSaveMember}>
+                Save member
+              </button>
+              <button type="button" className="secondary-action" onClick={() => onMemberDraftChange(emptyMemberDraft)}>
+                New
+              </button>
+            </div>
+          </section>
 
-        <section className="panel">
-          <h2>{choreDraft.id ? 'Edit chore' : 'Add chore'}</h2>
-          <label>
-            Chore name
-            <input
-              value={choreDraft.name}
-              onChange={(event) => onChoreDraftChange({ ...choreDraft, name: event.target.value })}
-            />
-          </label>
-          <label>
-            Description
-            <textarea
-              value={choreDraft.description}
-              onChange={(event) => onChoreDraftChange({ ...choreDraft, description: event.target.value })}
-            />
-          </label>
-          <label>
-            Frequency
-            <select
-              value={choreDraft.frequency_type}
-              onChange={(event) => onChoreDraftChange({ ...choreDraft, frequency_type: event.target.value as FrequencyType })}
-            >
-              <option value="daily">Daily</option>
-              <option value="weekly">Weekly</option>
-              <option value="monthly">Monthly</option>
-              <option value="as_needed">As needed</option>
-            </select>
-          </label>
-          <label>
-            Assign to
-            <select
-              value={choreDraft.assigned_member_id}
-              onChange={(event) =>
-                onChoreDraftChange({
-                  ...choreDraft,
-                  assigned_member_id: event.target.value === '' ? '' : Number(event.target.value),
-                })
-              }
-            >
-              <option value="">Anyone</option>
-              {members.filter((member) => member.active === 1).map((member) => (
-                <option key={member.id} value={member.id}>
-                  {member.display_name}
-                </option>
+          <section className="panel">
+            <h2>Family members</h2>
+            <div className="member-grid">
+              <div className="member-grid-header" aria-hidden="true">
+                <span>Display</span>
+                <span>Type</span>
+                <span>Sort order</span>
+                <span>Active</span>
+                <span>Actions</span>
+              </div>
+              {members.map((member) => (
+                <article key={member.id} className="member-grid-row">
+                  <strong>{member.display_name}</strong>
+                  <span>{member.member_type}</span>
+                  <span>{member.sort_order}</span>
+                  <span>{member.active ? 'Yes' : 'No'}</span>
+                  <div className="member-grid-actions">
+                    <button type="button" onClick={() => onMemberDraftChange({ ...member })}>
+                      Edit
+                    </button>
+                    {member.active === 1 && (
+                      <button type="button" className="danger-action" onClick={() => onDeleteMember(member)}>
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                </article>
               ))}
-            </select>
-          </label>
-          <label className="check-row">
-            <input
-              type="checkbox"
-              checked={choreDraft.alert_if_overdue === 1}
-              onChange={(event) => onChoreDraftChange({ ...choreDraft, alert_if_overdue: event.target.checked ? 1 : 0 })}
-            />
-            Track overdue
-          </label>
-          <label className="check-row">
-            <input
-              type="checkbox"
-              checked={choreDraft.needs_reminder === 1}
-              onChange={(event) => onChoreDraftChange({ ...choreDraft, needs_reminder: event.target.checked ? 1 : 0 })}
-            />
-            Needs reminder
-          </label>
-          <label className="check-row">
-            <input
-              type="checkbox"
-              checked={choreDraft.active === 1}
-              onChange={(event) => onChoreDraftChange({ ...choreDraft, active: event.target.checked ? 1 : 0 })}
-            />
-            Active
-          </label>
-          <div className="action-row">
-            <button type="button" className="primary-action" onClick={onSaveChore}>
-              Save chore
-            </button>
-            <button type="button" className="secondary-action" onClick={() => onChoreDraftChange(emptyChoreDraft)}>
-              New
-            </button>
-          </div>
-        </section>
-      </div>
+            </div>
+          </section>
+        </>
+      )}
 
-      <div className="admin-layout">
-        <section className="panel">
-          <h2>{noteDraft.id ? 'Edit household note' : 'Add household note'}</h2>
-          <label>
-            Type
-            <select
-              value={noteDraft.note_type}
-              onChange={(event) => onNoteDraftChange({ ...noteDraft, note_type: event.target.value as NoteType })}
-            >
-              <option value="note">Note</option>
-              <option value="shopping">Shopping</option>
-              <option value="reminder">Reminder</option>
-            </select>
-          </label>
-          <label>
-            Text
-            <textarea
-              value={noteDraft.text}
-              onChange={(event) => onNoteDraftChange({ ...noteDraft, text: event.target.value })}
-            />
-          </label>
-          <label className="check-row">
-            <input
-              type="checkbox"
-              checked={noteDraft.active === 1}
-              onChange={(event) => onNoteDraftChange({ ...noteDraft, active: event.target.checked ? 1 : 0 })}
-            />
-            Active
-          </label>
-          <div className="action-row">
-            <button type="button" className="primary-action" onClick={onSaveNote}>
-              Save note
-            </button>
-            <button type="button" className="secondary-action" onClick={() => onNoteDraftChange(emptyNoteDraft)}>
-              New
-            </button>
-          </div>
-        </section>
+      {section === 'chores' && (
+        <div className="admin-layout">
+          <section className="panel">
+            <h2>{choreDraft.id ? 'Edit chore' : 'Add chore'}</h2>
+            <label>
+              Chore name
+              <input
+                value={choreDraft.name}
+                onChange={(event) => onChoreDraftChange({ ...choreDraft, name: event.target.value })}
+              />
+            </label>
+            <label>
+              Description
+              <textarea
+                value={choreDraft.description}
+                onChange={(event) => onChoreDraftChange({ ...choreDraft, description: event.target.value })}
+              />
+            </label>
+            <label>
+              Frequency
+              <select
+                value={choreDraft.frequency_type}
+                onChange={(event) => onChoreDraftChange({ ...choreDraft, frequency_type: event.target.value as FrequencyType })}
+              >
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
+                <option value="as_needed">As needed</option>
+              </select>
+            </label>
+            <label>
+              Assign to
+              <select
+                value={choreDraft.assigned_member_id}
+                onChange={(event) =>
+                  onChoreDraftChange({
+                    ...choreDraft,
+                    assigned_member_id: event.target.value === '' ? '' : Number(event.target.value),
+                  })
+                }
+              >
+                <option value="">Anyone</option>
+                {members.filter((member) => member.active === 1).map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.display_name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={choreDraft.alert_if_overdue === 1}
+                onChange={(event) => onChoreDraftChange({ ...choreDraft, alert_if_overdue: event.target.checked ? 1 : 0 })}
+              />
+              Track overdue
+            </label>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={choreDraft.needs_reminder === 1}
+                onChange={(event) => onChoreDraftChange({ ...choreDraft, needs_reminder: event.target.checked ? 1 : 0 })}
+              />
+              Needs reminder
+            </label>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={choreDraft.active === 1}
+                onChange={(event) => onChoreDraftChange({ ...choreDraft, active: event.target.checked ? 1 : 0 })}
+              />
+              Active
+            </label>
+            <div className="action-row">
+              <button type="button" className="primary-action" onClick={onSaveChore}>
+                Save chore
+              </button>
+              <button type="button" className="secondary-action" onClick={() => onChoreDraftChange(emptyChoreDraft)}>
+                New
+              </button>
+            </div>
+          </section>
 
+          <section className="panel">
+            <h2>Chores</h2>
+            <div className="read-list">
+              {chores.map((chore) => (
+                <article key={chore.id} className="read-item">
+                  <strong>{chore.name}</strong>
+                  <span>
+                    {frequencyLabel(chore.frequency_type)} · {chore.active ? 'active' : 'inactive'}
+                    {chore.assigned_member_name ? ` · ${chore.assigned_member_name}` : ''}
+                    {chore.needs_reminder ? ' · reminder' : ''}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onChoreDraftChange({
+                        id: chore.id,
+                        name: chore.name,
+                        description: chore.description ?? '',
+                        frequency_type: chore.frequency_type,
+                        assigned_member_id: chore.assigned_member_id ?? '',
+                        alert_if_overdue: chore.alert_if_overdue,
+                        needs_reminder: chore.needs_reminder,
+                        active: chore.active,
+                      })
+                    }
+                  >
+                    Edit
+                  </button>
+                </article>
+              ))}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {section === 'backup' && (
         <section className="panel">
           <h2>Backup</h2>
           <p>Download a lightweight JSON export for household records.</p>
@@ -1454,64 +1520,47 @@ function AdminView({
             Export household data
           </button>
         </section>
-      </div>
+      )}
 
-      <div className="admin-layout">
-        <section className="panel">
-          <h2>Family members</h2>
-          <div className="read-list">
-            {members.map((member) => (
-              <article key={member.id} className="read-item">
-                <strong>{member.display_name}</strong>
-                <span>
-                  {member.member_type} · order {member.sort_order} · {member.active ? 'active' : 'inactive'}
-                </span>
-                <button type="button" onClick={() => onMemberDraftChange({ ...member })}>
-                  Edit
-                </button>
-                {member.active === 1 && (
-                  <button type="button" className="danger-action" onClick={() => onDeleteMember(member)}>
-                    Delete
-                  </button>
-                )}
-              </article>
-            ))}
-          </div>
-        </section>
-
-        <section className="panel">
-          <h2>Chores</h2>
-          <div className="read-list">
-            {chores.map((chore) => (
-              <article key={chore.id} className="read-item">
-                <strong>{chore.name}</strong>
-                <span>
-                  {frequencyLabel(chore.frequency_type)} · {chore.active ? 'active' : 'inactive'}
-                  {chore.assigned_member_name ? ` · ${chore.assigned_member_name}` : ''}
-                  {chore.needs_reminder ? ' · reminder' : ''}
-                </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    onChoreDraftChange({
-                      id: chore.id,
-                      name: chore.name,
-                      description: chore.description ?? '',
-                      frequency_type: chore.frequency_type,
-                      assigned_member_id: chore.assigned_member_id ?? '',
-                      alert_if_overdue: chore.alert_if_overdue,
-                      needs_reminder: chore.needs_reminder,
-                      active: chore.active,
-                    })
-                  }
-                >
-                  Edit
-                </button>
-              </article>
-            ))}
-          </div>
-        </section>
-      </div>
+      {section === 'notes' && (
+        <>
+      <section className="panel">
+        <h2>{noteDraft.id ? 'Edit household note' : 'Add household note'}</h2>
+        <label>
+          Type
+          <select
+            value={noteDraft.note_type}
+            onChange={(event) => onNoteDraftChange({ ...noteDraft, note_type: event.target.value as NoteType })}
+          >
+            <option value="note">Note</option>
+            <option value="shopping">Shopping</option>
+            <option value="reminder">Reminder</option>
+          </select>
+        </label>
+        <label>
+          Text
+          <textarea
+            value={noteDraft.text}
+            onChange={(event) => onNoteDraftChange({ ...noteDraft, text: event.target.value })}
+          />
+        </label>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={noteDraft.active === 1}
+            onChange={(event) => onNoteDraftChange({ ...noteDraft, active: event.target.checked ? 1 : 0 })}
+          />
+          Active
+        </label>
+        <div className="action-row">
+          <button type="button" className="primary-action" onClick={onSaveNote}>
+            Save note
+          </button>
+          <button type="button" className="secondary-action" onClick={() => onNoteDraftChange(emptyNoteDraft)}>
+            New
+          </button>
+        </div>
+      </section>
 
       <section className="panel">
         <h2>Household notes</h2>
@@ -1530,6 +1579,8 @@ function AdminView({
           ))}
         </div>
       </section>
+        </>
+      )}
     </section>
   )
 }
@@ -1587,6 +1638,14 @@ function chorePriority(chore: Chore) {
 function frequencyLabel(frequency: FrequencyType) {
   if (frequency === 'as_needed') return 'As needed'
   return frequency[0].toUpperCase() + frequency.slice(1)
+}
+
+function setupSectionTitle(section: 'menu' | 'members' | 'chores' | 'notes' | 'backup') {
+  if (section === 'members') return 'Manage family members'
+  if (section === 'chores') return 'Manage chores'
+  if (section === 'notes') return 'Manage notes'
+  if (section === 'backup') return 'Backup'
+  return 'What do you want to manage?'
 }
 
 function noteTypeLabel(type: NoteType) {
