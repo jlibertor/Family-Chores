@@ -41,6 +41,7 @@ The smoke script verifies:
 - admin PIN gate
 - household notes
 - lightweight export
+- display and notes screens
 - kiosk session creation
 - completion insert
 - recent history

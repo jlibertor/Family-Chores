@@ -87,6 +87,19 @@ button:focus-visible {
   gap: 20px;
 }
 
+.display-screen.low-light {
+  --text: #d6d3c8;
+  --muted: #aaa38f;
+  --heading: #fff9e8;
+  --surface: #171814;
+  --soft: #24251f;
+  --border: #383a31;
+  --primary: #8c9b5f;
+  background: #10110e;
+  border-radius: 8px;
+  padding: 12px;
+}
+
 .display-hero {
   display: grid;
   gap: 6px;
@@ -332,6 +345,23 @@ button:focus-visible {
   border-left: 4px solid var(--border);
   color: var(--text);
   padding-left: 10px;
+}
+
+.activity-feed {
+  display: grid;
+  gap: 10px;
+}
+
+.activity-feed article {
+  display: grid;
+  gap: 2px;
+  border-left: 4px solid var(--border);
+  padding-left: 10px;
+}
+
+.activity-feed small {
+  color: var(--muted);
+  font-weight: 700;
 }
 
 .history-meta {

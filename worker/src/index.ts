@@ -222,6 +222,7 @@ async function householdStatus(db: D1Database) {
         c.needs_reminder,
         c.alert_if_overdue,
         lc.completed_at AS last_completed_at,
+        CAST(julianday('now') - julianday(lc.completed_at) AS INTEGER) AS days_since_completed,
         fm.display_name AS last_completed_by,
         CASE
           WHEN c.frequency_type = 'daily'
@@ -252,7 +253,13 @@ async function householdStatus(db: D1Database) {
     .filter((row) => row.is_due === 1)
     .map((row) => ({
       chore_id: row.id,
-      message: `${row.name} is due${row.last_completed_by ? `; last completed by ${row.last_completed_by}` : ""}.`,
+      message: `${row.name} is due${
+        row.last_completed_by
+          ? `; last completed by ${row.last_completed_by}${
+              Number(row.days_since_completed) > 0 ? ` ${row.days_since_completed} day(s) ago` : ""
+            }`
+          : ""
+      }.`,
     }));
 
   return json({

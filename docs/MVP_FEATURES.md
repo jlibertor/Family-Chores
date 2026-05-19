@@ -73,3 +73,6 @@ Lightweight convenience now included:
 - Household notes and shopping reminders
 - Monthly chore frequency
 - Lightweight JSON export
+- Smart chore ordering
+- Calm household activity feed
+- Low-light mounted display mode

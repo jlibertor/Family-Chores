@@ -236,8 +236,8 @@ function App() {
     () => members.find((member) => member.id === kioskMemberId) ?? null,
     [members, kioskMemberId],
   )
-  const dueChores = chores.filter((chore) => chore.is_due === 1)
-  const otherChores = chores.filter((chore) => chore.is_due !== 1)
+  const dueChores = sortChoresForHousehold(chores.filter((chore) => chore.is_due === 1))
+  const otherChores = sortChoresForHousehold(chores.filter((chore) => chore.is_due !== 1))
 
   function navigate(nextRoute: string) {
     window.history.pushState({}, '', nextRoute)
@@ -527,6 +527,7 @@ function App() {
           today={today}
           chores={chores}
           status={status}
+          history={history}
           notificationsEnabled={notificationsEnabled}
           onEnableNotifications={() => void enableNotifications()}
           onStart={() => navigate('/choose-mode')}
@@ -534,7 +535,7 @@ function App() {
       )}
 
       {route === '/display' && (
-        <DisplayView today={today} status={status} notes={notes} currentTime={currentTime} />
+        <DisplayView today={today} status={status} notes={notes} history={history} currentTime={currentTime} />
       )}
 
       {route === '/notes' && <NotesView notes={notes} />}
@@ -683,15 +684,19 @@ function DisplayView({
   today,
   status,
   notes,
+  history,
   currentTime,
 }: {
   today: TodayState
   status: HouseholdStatus
   notes: HouseholdNote[]
+  history: Completion[]
   currentTime: Date
 }) {
+  const isLowLight = currentTime.getHours() < 6 || currentTime.getHours() >= 21
+
   return (
-    <section className="display-screen">
+    <section className={`display-screen${isLowLight ? ' low-light' : ''}`}>
       <div className="display-hero">
         <p>{formatLongDate(currentTime)}</p>
         <h1>{formatClock(currentTime)}</h1>
@@ -704,6 +709,7 @@ function DisplayView({
           <strong className="big-number">{today.completedToday.length}</strong>
           <p className="empty-state">{status.weekly.totalCompleted} completed this week</p>
         </section>
+        <ActivityFeed history={history} />
         <section className="panel">
           <h2>Household notes</h2>
           <div className="read-list">
@@ -758,6 +764,7 @@ function TodayView({
   today,
   chores,
   status,
+  history,
   notificationsEnabled,
   onEnableNotifications,
   onStart,
@@ -765,6 +772,7 @@ function TodayView({
   today: TodayState
   chores: Chore[]
   status: HouseholdStatus
+  history: Completion[]
   notificationsEnabled: boolean
   onEnableNotifications: () => void
   onStart: () => void
@@ -819,8 +827,8 @@ function TodayView({
       </section>
 
       <div className="chores-layout">
-        <ReadOnlyChoreSection title="Overdue" chores={today.overdue} emptyText="Nothing overdue." />
-        <ReadOnlyChoreSection title="Due today" chores={today.due} emptyText="No due chores right now." />
+        <ReadOnlyChoreSection title="Overdue" chores={sortChoresForHousehold(today.overdue)} emptyText="Nothing overdue." />
+        <ReadOnlyChoreSection title="Due today" chores={sortChoresForHousehold(today.due)} emptyText="No due chores right now." />
       </div>
 
       <section className="panel">
@@ -833,7 +841,27 @@ function TodayView({
         </div>
       </section>
 
-      <ReadOnlyChoreSection title="All active chores" chores={chores} emptyText="No active chores." />
+      <ActivityFeed history={history} />
+
+      <ReadOnlyChoreSection title="All active chores" chores={sortChoresForHousehold(chores)} emptyText="No active chores." />
+    </section>
+  )
+}
+
+function ActivityFeed({ history }: { history: Completion[] }) {
+  return (
+    <section className="panel">
+      <h2>Activity</h2>
+      <div className="activity-feed">
+        {history.length === 0 && <p className="empty-state">No recent activity.</p>}
+        {history.slice(0, 6).map((completion) => (
+          <article key={completion.id}>
+            <strong>{completion.member_name}</strong>
+            <span> completed {completion.chore_name}</span>
+            <small>{formatTime(completion.completed_at)}</small>
+          </article>
+        ))}
+      </div>
     </section>
   )
 }
@@ -1353,6 +1381,20 @@ function choreMeta(chore: Chore) {
   const status = chore.is_overdue ? 'Overdue' : chore.is_due ? 'Due' : 'Current'
 
   return `${frequencyLabel(chore.frequency_type)} · ${status}${assigned}${lastDone}`
+}
+
+function sortChoresForHousehold(items: Chore[]) {
+  return [...items].sort((left, right) => chorePriority(left) - chorePriority(right) || left.name.localeCompare(right.name))
+}
+
+function chorePriority(chore: Chore) {
+  let priority = 0
+  if (chore.is_overdue) priority -= 100
+  if (chore.is_due) priority -= 50
+  if (chore.needs_reminder) priority -= 10
+  if (!chore.last_completed_at) priority -= 5
+  if (chore.last_completed_at && relativeDate(chore.last_completed_at) === 'today') priority += 50
+  return priority
 }
 
 function frequencyLabel(frequency: FrequencyType) {

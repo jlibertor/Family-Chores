@@ -52,6 +52,8 @@ Parent setup endpoints require the `X-Parent-Pin` header:
 - `PUT /api/admin/notes/:id`
 - `GET /api/admin/export`
 
+Frontend routes include operational screens (`/today`, `/member`, `/kiosk`, `/history`, `/admin`) plus long-running household screens (`/display`, `/notes`).
+
 ## Database
 
 Database migrations live in `database/migrations/`. The target database is Cloudflare D1, which uses SQLite-compatible SQL.
