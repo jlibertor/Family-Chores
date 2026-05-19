@@ -82,6 +82,36 @@ button:focus-visible {
   gap: 20px;
 }
 
+.display-screen {
+  display: grid;
+  gap: 20px;
+}
+
+.display-hero {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 22px;
+  text-align: center;
+}
+
+.display-hero h1 {
+  font-size: clamp(4rem, 16vw, 8rem);
+}
+
+.display-hero p {
+  color: var(--muted);
+  font-size: 1.2rem;
+  font-weight: 800;
+}
+
+.display-grid {
+  display: grid;
+  gap: 16px;
+}
+
 .screen.narrow {
   max-width: 480px;
 }
@@ -240,6 +270,12 @@ button:focus-visible {
   line-height: 1;
 }
 
+.big-number {
+  color: var(--heading);
+  font-size: clamp(3rem, 12vw, 5rem);
+  line-height: 1;
+}
+
 .today-summary span {
   color: var(--muted);
   font-weight: 700;
@@ -362,7 +398,8 @@ button:focus-visible {
 
   .choice-grid,
   .chores-layout,
-  .admin-layout {
+  .admin-layout,
+  .display-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

@@ -44,6 +44,9 @@ assert(typeof status.weekly?.totalCompleted === 'number', 'Status endpoint shoul
 assert(Array.isArray(status.reminders), 'Status endpoint should return reminders.')
 assert(Array.isArray(status.suggestions), 'Status endpoint should return suggestions.')
 
+const notes = await request('/api/notes')
+assert(Array.isArray(notes.notes), 'Notes endpoint should return notes.')
+
 const unauthorized = await fetch(`${apiBase}/api/admin/members`)
 assert(unauthorized.status === 401, 'Admin members should require a PIN.')
 
@@ -51,6 +54,24 @@ const adminMembers = await request('/api/admin/members', {
   headers: { 'X-Parent-Pin': parentPin },
 })
 assert(Array.isArray(adminMembers.members), 'Admin members endpoint should return members.')
+
+const note = await request('/api/admin/notes', {
+  method: 'POST',
+  headers: { 'X-Parent-Pin': parentPin },
+  body: JSON.stringify({
+    note_type: 'note',
+    text: 'Smoke test note',
+    active: 1,
+  }),
+})
+assert(note.note?.id, 'Admin notes endpoint should create a note.')
+
+const exported = await request('/api/admin/export', {
+  headers: { 'X-Parent-Pin': parentPin },
+})
+assert(Array.isArray(exported.members), 'Export should include members.')
+assert(Array.isArray(exported.chores), 'Export should include chores.')
+assert(Array.isArray(exported.notes), 'Export should include notes.')
 
 const session = await request('/api/session/kiosk', {
   method: 'POST',

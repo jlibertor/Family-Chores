@@ -69,3 +69,7 @@ Lightweight convenience now included:
 - Reminder flag for chores
 - Weekly household status
 - Kiosk status summary
+- Ambient display mode
+- Household notes and shopping reminders
+- Monthly chore frequency
+- Lightweight JSON export

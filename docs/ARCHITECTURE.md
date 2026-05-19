@@ -32,6 +32,7 @@ Current endpoints:
 - `GET /api/chores`
 - `GET /api/today`
 - `GET /api/status`
+- `GET /api/notes`
 - `POST /api/completions`
 - `GET /api/completions/recent`
 - `POST /api/session/select-member`
@@ -46,6 +47,10 @@ Parent setup endpoints require the `X-Parent-Pin` header:
 - `GET /api/admin/chores`
 - `POST /api/admin/chores`
 - `PUT /api/admin/chores/:id`
+- `GET /api/admin/notes`
+- `POST /api/admin/notes`
+- `PUT /api/admin/notes/:id`
+- `GET /api/admin/export`
 
 ## Database
 

@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import './App.css'
 
 type MemberType = 'adult' | 'child'
-type FrequencyType = 'daily' | 'weekly' | 'as_needed'
+type FrequencyType = 'daily' | 'weekly' | 'monthly' | 'as_needed'
+type NoteType = 'note' | 'shopping' | 'reminder'
 
 type Member = {
   id: number
@@ -73,6 +74,14 @@ type HouseholdStatus = {
   }>
 }
 
+type HouseholdNote = {
+  id: number
+  note_type: NoteType
+  text: string
+  active: 0 | 1
+  updated_at: string
+}
+
 type MemberDraft = {
   id: number | null
   display_name: string
@@ -92,12 +101,19 @@ type ChoreDraft = {
   active: 0 | 1
 }
 
+type NoteDraft = {
+  id: number | null
+  note_type: NoteType
+  text: string
+  active: 0 | 1
+}
+
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
 
 const memberKey = 'family-chores.member-id'
 const sessionKey = 'family-chores.session'
 
-const routes = ['/today', '/choose-mode', '/member', '/kiosk', '/history', '/admin'] as const
+const routes = ['/today', '/display', '/notes', '/choose-mode', '/member', '/kiosk', '/history', '/admin'] as const
 
 const emptyMemberDraft: MemberDraft = {
   id: null,
@@ -115,6 +131,13 @@ const emptyChoreDraft: ChoreDraft = {
   assigned_member_id: '',
   alert_if_overdue: 0,
   needs_reminder: 0,
+  active: 1,
+}
+
+const emptyNoteDraft: NoteDraft = {
+  id: null,
+  note_type: 'note',
+  text: '',
   active: 1,
 }
 
@@ -173,6 +196,7 @@ function App() {
   const [members, setMembers] = useState<Member[]>([])
   const [chores, setChores] = useState<Chore[]>([])
   const [history, setHistory] = useState<Completion[]>([])
+  const [notes, setNotes] = useState<HouseholdNote[]>([])
   const [today, setToday] = useState<TodayState>({ due: [], overdue: [], completedToday: [] })
   const [status, setStatus] = useState<HouseholdStatus>({
     weekly: { totalCompleted: 0, byMember: [], mostActive: null },
@@ -193,8 +217,10 @@ function App() {
   const [adminUnlocked, setAdminUnlocked] = useState(false)
   const [adminMembers, setAdminMembers] = useState<Member[]>([])
   const [adminChores, setAdminChores] = useState<Chore[]>([])
+  const [adminNotes, setAdminNotes] = useState<HouseholdNote[]>([])
   const [memberDraft, setMemberDraft] = useState<MemberDraft>(emptyMemberDraft)
   const [choreDraft, setChoreDraft] = useState<ChoreDraft>(emptyChoreDraft)
+  const [noteDraft, setNoteDraft] = useState<NoteDraft>(emptyNoteDraft)
   const [submitting, setSubmitting] = useState(false)
   const [completionNote, setCompletionNote] = useState('')
   const [notificationsEnabled, setNotificationsEnabled] = useState(
@@ -226,11 +252,12 @@ function App() {
     setError('')
 
     try {
-      const [memberData, choreData, todayData, statusData, historyData] = await Promise.all([
+      const [memberData, choreData, todayData, statusData, noteData, historyData] = await Promise.all([
         api<{ ok: boolean; members: Member[] }>('/api/members'),
         api<{ ok: boolean; chores: Chore[] }>('/api/chores'),
         api<TodayState & { ok: boolean }>('/api/today'),
         api<HouseholdStatus & { ok: boolean }>('/api/status'),
+        api<{ ok: boolean; notes: HouseholdNote[] }>('/api/notes'),
         api<{ ok: boolean; completions: Completion[] }>('/api/completions/recent'),
       ])
 
@@ -246,6 +273,7 @@ function App() {
         reminders: statusData.reminders,
         suggestions: statusData.suggestions,
       })
+      setNotes(noteData.notes)
       setHistory(historyData.completions)
       setLoadState('ready')
     } catch (currentError) {
@@ -255,17 +283,21 @@ function App() {
   }
 
   async function loadAdminData(pin = adminPin) {
-    const [memberData, choreData] = await Promise.all([
+    const [memberData, choreData, noteData] = await Promise.all([
       api<{ ok: boolean; members: Member[] }>('/api/admin/members', {
         headers: { 'X-Parent-Pin': pin },
       }),
       api<{ ok: boolean; chores: Chore[] }>('/api/admin/chores', {
         headers: { 'X-Parent-Pin': pin },
       }),
+      api<{ ok: boolean; notes: HouseholdNote[] }>('/api/admin/notes', {
+        headers: { 'X-Parent-Pin': pin },
+      }),
     ])
 
     setAdminMembers(memberData.members)
     setAdminChores(choreData.chores)
+    setAdminNotes(noteData.notes)
   }
 
   useEffect(() => {
@@ -409,6 +441,45 @@ function App() {
     }
   }
 
+  async function saveNote() {
+    setError('')
+
+    try {
+      const method = noteDraft.id ? 'PUT' : 'POST'
+      const path = noteDraft.id ? `/api/admin/notes/${noteDraft.id}` : '/api/admin/notes'
+      await api(path, {
+        method,
+        headers: { 'X-Parent-Pin': adminPin },
+        body: JSON.stringify(noteDraft),
+      })
+      setNoteDraft(emptyNoteDraft)
+      await Promise.all([loadAdminData(), refreshHousehold()])
+      setSuccessMessage('Household note saved.')
+    } catch (currentError) {
+      setError(currentError instanceof Error ? currentError.message : 'Could not save household note.')
+    }
+  }
+
+  async function exportHouseholdData() {
+    setError('')
+
+    try {
+      const data = await api<Record<string, unknown>>('/api/admin/export', {
+        headers: { 'X-Parent-Pin': adminPin },
+      })
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `family-chores-export-${new Date().toISOString().slice(0, 10)}.json`
+      link.click()
+      URL.revokeObjectURL(url)
+      setSuccessMessage('Household export downloaded.')
+    } catch (currentError) {
+      setError(currentError instanceof Error ? currentError.message : 'Could not export household data.')
+    }
+  }
+
   async function enableNotifications() {
     if (!('Notification' in window)) {
       setError('This browser does not support notifications.')
@@ -438,6 +509,8 @@ function App() {
         </button>
         <nav aria-label="Main navigation">
           <button type="button" onClick={() => navigate('/today')}>Today</button>
+          <button type="button" onClick={() => navigate('/display')}>Display</button>
+          <button type="button" onClick={() => navigate('/notes')}>Notes</button>
           <button type="button" onClick={() => navigate('/member')}>Member</button>
           <button type="button" onClick={() => navigate('/kiosk')}>Kiosk</button>
           <button type="button" onClick={() => navigate('/history')}>History</button>
@@ -459,6 +532,12 @@ function App() {
           onStart={() => navigate('/choose-mode')}
         />
       )}
+
+      {route === '/display' && (
+        <DisplayView today={today} status={status} notes={notes} currentTime={currentTime} />
+      )}
+
+      {route === '/notes' && <NotesView notes={notes} />}
 
       {route === '/choose-mode' && (
         <section className="screen">
@@ -583,15 +662,95 @@ function App() {
           chores={adminChores}
           memberDraft={memberDraft}
           choreDraft={choreDraft}
+          noteDraft={noteDraft}
+          notes={adminNotes}
           onPinChange={setAdminPin}
           onUnlock={() => void unlockAdmin()}
           onMemberDraftChange={setMemberDraft}
           onChoreDraftChange={setChoreDraft}
+          onNoteDraftChange={setNoteDraft}
           onSaveMember={() => void saveMember()}
           onSaveChore={() => void saveChore()}
+          onSaveNote={() => void saveNote()}
+          onExport={() => void exportHouseholdData()}
         />
       )}
     </main>
+  )
+}
+
+function DisplayView({
+  today,
+  status,
+  notes,
+  currentTime,
+}: {
+  today: TodayState
+  status: HouseholdStatus
+  notes: HouseholdNote[]
+  currentTime: Date
+}) {
+  return (
+    <section className="display-screen">
+      <div className="display-hero">
+        <p>{formatLongDate(currentTime)}</p>
+        <h1>{formatClock(currentTime)}</h1>
+      </div>
+      <div className="display-grid">
+        <ReadOnlyChoreSection title="Overdue" chores={today.overdue} emptyText="Nothing overdue." />
+        <ReadOnlyChoreSection title="Due today" chores={today.due} emptyText="All scheduled chores are current." />
+        <section className="panel">
+          <h2>Completed today</h2>
+          <strong className="big-number">{today.completedToday.length}</strong>
+          <p className="empty-state">{status.weekly.totalCompleted} completed this week</p>
+        </section>
+        <section className="panel">
+          <h2>Household notes</h2>
+          <div className="read-list">
+            {notes.length === 0 && <p className="empty-state">No active notes.</p>}
+            {notes.slice(0, 5).map((note) => (
+              <article key={note.id} className="read-item">
+                <strong>{noteTypeLabel(note.note_type)}</strong>
+                <span>{note.text}</span>
+              </article>
+            ))}
+          </div>
+        </section>
+      </div>
+    </section>
+  )
+}
+
+function NotesView({ notes }: { notes: HouseholdNote[] }) {
+  const grouped = notes.reduce<Record<NoteType, HouseholdNote[]>>(
+    (groups, note) => {
+      groups[note.note_type] = [...groups[note.note_type], note]
+      return groups
+    },
+    { note: [], shopping: [], reminder: [] },
+  )
+
+  return (
+    <section className="screen">
+      <div className="screen-heading">
+        <p className="eyebrow">Household notes</p>
+        <h1>Quick reminders</h1>
+      </div>
+      {(['reminder', 'shopping', 'note'] as NoteType[]).map((type) => (
+        <section key={type} className="panel">
+          <h2>{noteTypeLabel(type)}</h2>
+          <div className="read-list">
+            {grouped[type].length === 0 && <p className="empty-state">Nothing here.</p>}
+            {grouped[type].map((note) => (
+              <article key={note.id} className="read-item">
+                <strong>{note.text}</strong>
+                <span>Updated {relativeDate(note.updated_at)}</span>
+              </article>
+            ))}
+          </div>
+        </section>
+      ))}
+    </section>
   )
 }
 
@@ -874,12 +1033,17 @@ function AdminView({
   chores,
   memberDraft,
   choreDraft,
+  noteDraft,
+  notes,
   onPinChange,
   onUnlock,
   onMemberDraftChange,
   onChoreDraftChange,
+  onNoteDraftChange,
   onSaveMember,
   onSaveChore,
+  onSaveNote,
+  onExport,
 }: {
   pin: string
   unlocked: boolean
@@ -887,12 +1051,17 @@ function AdminView({
   chores: Chore[]
   memberDraft: MemberDraft
   choreDraft: ChoreDraft
+  noteDraft: NoteDraft
+  notes: HouseholdNote[]
   onPinChange: (pin: string) => void
   onUnlock: () => void
   onMemberDraftChange: (draft: MemberDraft) => void
   onChoreDraftChange: (draft: ChoreDraft) => void
+  onNoteDraftChange: (draft: NoteDraft) => void
   onSaveMember: () => void
   onSaveChore: () => void
+  onSaveNote: () => void
+  onExport: () => void
 }) {
   if (!unlocked) {
     return (
@@ -997,6 +1166,7 @@ function AdminView({
             >
               <option value="daily">Daily</option>
               <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
               <option value="as_needed">As needed</option>
             </select>
           </label>
@@ -1056,6 +1226,54 @@ function AdminView({
 
       <div className="admin-layout">
         <section className="panel">
+          <h2>{noteDraft.id ? 'Edit household note' : 'Add household note'}</h2>
+          <label>
+            Type
+            <select
+              value={noteDraft.note_type}
+              onChange={(event) => onNoteDraftChange({ ...noteDraft, note_type: event.target.value as NoteType })}
+            >
+              <option value="note">Note</option>
+              <option value="shopping">Shopping</option>
+              <option value="reminder">Reminder</option>
+            </select>
+          </label>
+          <label>
+            Text
+            <textarea
+              value={noteDraft.text}
+              onChange={(event) => onNoteDraftChange({ ...noteDraft, text: event.target.value })}
+            />
+          </label>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={noteDraft.active === 1}
+              onChange={(event) => onNoteDraftChange({ ...noteDraft, active: event.target.checked ? 1 : 0 })}
+            />
+            Active
+          </label>
+          <div className="action-row">
+            <button type="button" className="primary-action" onClick={onSaveNote}>
+              Save note
+            </button>
+            <button type="button" className="secondary-action" onClick={() => onNoteDraftChange(emptyNoteDraft)}>
+              New
+            </button>
+          </div>
+        </section>
+
+        <section className="panel">
+          <h2>Backup</h2>
+          <p>Download a lightweight JSON export for household records.</p>
+          <button type="button" className="secondary-action" onClick={onExport}>
+            Export household data
+          </button>
+        </section>
+      </div>
+
+      <div className="admin-layout">
+        <section className="panel">
           <h2>Family members</h2>
           <div className="read-list">
             {members.map((member) => (
@@ -1105,6 +1323,24 @@ function AdminView({
           </div>
         </section>
       </div>
+
+      <section className="panel">
+        <h2>Household notes</h2>
+        <div className="read-list">
+          {notes.length === 0 && <p className="empty-state">No notes yet.</p>}
+          {notes.map((note) => (
+            <article key={note.id} className="read-item">
+              <strong>{note.text}</strong>
+              <span>
+                {noteTypeLabel(note.note_type)} · {note.active ? 'active' : 'inactive'}
+              </span>
+              <button type="button" onClick={() => onNoteDraftChange({ ...note })}>
+                Edit
+              </button>
+            </article>
+          ))}
+        </div>
+      </section>
     </section>
   )
 }
@@ -1122,6 +1358,12 @@ function choreMeta(chore: Chore) {
 function frequencyLabel(frequency: FrequencyType) {
   if (frequency === 'as_needed') return 'As needed'
   return frequency[0].toUpperCase() + frequency.slice(1)
+}
+
+function noteTypeLabel(type: NoteType) {
+  if (type === 'shopping') return 'Shopping'
+  if (type === 'reminder') return 'Reminder'
+  return 'Note'
 }
 
 function dayLabel(value: string) {
@@ -1147,6 +1389,14 @@ function formatClock(value: Date) {
   return new Intl.DateTimeFormat(undefined, {
     hour: 'numeric',
     minute: '2-digit',
+  }).format(value)
+}
+
+function formatLongDate(value: Date) {
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
   }).format(value)
 }
 

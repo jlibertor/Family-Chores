@@ -5,7 +5,7 @@ interface Env {
 
 type SessionMode = "member" | "kiosk" | "admin";
 type MemberType = "adult" | "child";
-type FrequencyType = "daily" | "weekly" | "as_needed";
+type FrequencyType = "daily" | "weekly" | "monthly" | "as_needed";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -55,7 +55,7 @@ const isSessionMode = (value: unknown): value is SessionMode =>
 const isMemberType = (value: unknown): value is MemberType => value === "adult" || value === "child";
 
 const isFrequencyType = (value: unknown): value is FrequencyType =>
-  value === "daily" || value === "weekly" || value === "as_needed";
+  value === "daily" || value === "weekly" || value === "monthly" || value === "as_needed";
 
 const requireParentPin = (request: Request, env: Env) => {
   const expectedPin = env.PARENT_PIN ?? "1234";
@@ -126,14 +126,17 @@ async function listChores(db: D1Database, includeInactive = false) {
             THEN lc.completed_at IS NULL OR date(lc.completed_at, 'localtime') < date('now', 'localtime')
           WHEN c.frequency_type = 'weekly'
             THEN lc.completed_at IS NULL OR strftime('%Y-%W', lc.completed_at, 'localtime') < strftime('%Y-%W', 'now', 'localtime')
+          WHEN c.frequency_type = 'monthly'
+            THEN lc.completed_at IS NULL OR strftime('%Y-%m', lc.completed_at, 'localtime') < strftime('%Y-%m', 'now', 'localtime')
           ELSE 0
         END AS is_due,
         CASE
-          WHEN c.frequency_type IN ('daily', 'weekly')
+          WHEN c.frequency_type IN ('daily', 'weekly', 'monthly')
             AND c.alert_if_overdue = 1
             AND (lc.completed_at IS NULL
               OR (c.frequency_type = 'daily' AND date(lc.completed_at, 'localtime') < date('now', 'localtime'))
-              OR (c.frequency_type = 'weekly' AND strftime('%Y-%W', lc.completed_at, 'localtime') < strftime('%Y-%W', 'now', 'localtime')))
+              OR (c.frequency_type = 'weekly' AND strftime('%Y-%W', lc.completed_at, 'localtime') < strftime('%Y-%W', 'now', 'localtime'))
+              OR (c.frequency_type = 'monthly' AND strftime('%Y-%m', lc.completed_at, 'localtime') < strftime('%Y-%m', 'now', 'localtime')))
           THEN 1
           ELSE 0
         END AS is_overdue
@@ -150,7 +153,8 @@ async function listChores(db: D1Database, includeInactive = false) {
         CASE c.frequency_type
           WHEN 'daily' THEN 1
           WHEN 'weekly' THEN 2
-          ELSE 3
+          WHEN 'monthly' THEN 3
+          ELSE 4
         END,
         c.name`,
     )
@@ -224,6 +228,8 @@ async function householdStatus(db: D1Database) {
             THEN lc.completed_at IS NULL OR date(lc.completed_at, 'localtime') < date('now', 'localtime')
           WHEN c.frequency_type = 'weekly'
             THEN lc.completed_at IS NULL OR strftime('%Y-%W', lc.completed_at, 'localtime') < strftime('%Y-%W', 'now', 'localtime')
+          WHEN c.frequency_type = 'monthly'
+            THEN lc.completed_at IS NULL OR strftime('%Y-%m', lc.completed_at, 'localtime') < strftime('%Y-%m', 'now', 'localtime')
           ELSE 0
         END AS is_due
        FROM chores c
@@ -469,6 +475,76 @@ async function saveChore(request: Request, db: D1Database, id: number | null) {
   });
 }
 
+async function listNotes(db: D1Database, includeInactive = false) {
+  const { results } = await db
+    .prepare(
+      `SELECT id, note_type, text, active, created_at, updated_at
+       FROM household_notes
+       ${includeInactive ? "" : "WHERE active = 1"}
+       ORDER BY active DESC, updated_at DESC, id DESC`,
+    )
+    .all();
+
+  return json({ ok: true, notes: results });
+}
+
+async function saveNote(request: Request, db: D1Database, id: number | null) {
+  const body = await readJson(request);
+  const noteType =
+    body.note_type === "shopping" || body.note_type === "reminder" || body.note_type === "note"
+      ? body.note_type
+      : "note";
+  const text = typeof body.text === "string" ? body.text.trim().slice(0, 300) : "";
+  const active = asActiveFlag(body.active);
+
+  if (!text) {
+    return badRequest("Note text is required.");
+  }
+
+  if (id) {
+    await db
+      .prepare(
+        `UPDATE household_notes
+         SET note_type = ?, text = ?, active = ?, updated_at = datetime('now')
+         WHERE id = ?`,
+      )
+      .bind(noteType, text, active, id)
+      .run();
+
+    return json({ ok: true, note: { id, note_type: noteType, text, active } });
+  }
+
+  const result = await db
+    .prepare(
+      `INSERT INTO household_notes (note_type, text, active)
+       VALUES (?, ?, ?)`,
+    )
+    .bind(noteType, text, active)
+    .run();
+
+  return json({ ok: true, note: { id: result.meta.last_row_id, note_type: noteType, text, active } });
+}
+
+async function exportData(db: D1Database) {
+  const [members, chores, completions, sessions, notes] = await Promise.all([
+    db.prepare("SELECT * FROM family_members ORDER BY sort_order, id").all(),
+    db.prepare("SELECT * FROM chores ORDER BY active DESC, id").all(),
+    db.prepare("SELECT * FROM chore_completions ORDER BY completed_at DESC, id DESC LIMIT 1000").all(),
+    db.prepare("SELECT id, mode, member_id, device_label, created_at, last_seen_at FROM device_sessions ORDER BY last_seen_at DESC LIMIT 500").all(),
+    db.prepare("SELECT * FROM household_notes ORDER BY updated_at DESC, id DESC").all(),
+  ]);
+
+  return json({
+    ok: true,
+    exportedAt: new Date().toISOString(),
+    members: members.results,
+    chores: chores.results,
+    completions: completions.results,
+    deviceSessions: sessions.results,
+    notes: notes.results,
+  });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method === "OPTIONS") {
@@ -478,6 +554,7 @@ export default {
     const url = new URL(request.url);
     const memberMatch = url.pathname.match(/^\/api\/admin\/members\/(\d+)$/);
     const choreMatch = url.pathname.match(/^\/api\/admin\/chores\/(\d+)$/);
+    const noteMatch = url.pathname.match(/^\/api\/admin\/notes\/(\d+)$/);
 
     if (url.pathname === "/health" || url.pathname === "/api/health") {
       return json({
@@ -501,6 +578,10 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/api/status") {
       return householdStatus(env.DB);
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/notes") {
+      return listNotes(env.DB);
     }
 
     if (request.method === "POST" && url.pathname === "/api/completions") {
@@ -545,6 +626,22 @@ export default {
 
     if (request.method === "PUT" && choreMatch) {
       return saveChore(request, env.DB, Number(choreMatch[1]));
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/admin/notes") {
+      return listNotes(env.DB, true);
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/admin/notes") {
+      return saveNote(request, env.DB, null);
+    }
+
+    if (request.method === "PUT" && noteMatch) {
+      return saveNote(request, env.DB, Number(noteMatch[1]));
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/admin/export") {
+      return exportData(env.DB);
     }
 
     return json({ ok: false, error: "Not found" }, { status: 404 });

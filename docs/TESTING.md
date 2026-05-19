@@ -39,6 +39,8 @@ The smoke script verifies:
 - today endpoint
 - household status endpoint
 - admin PIN gate
+- household notes
+- lightweight export
 - kiosk session creation
 - completion insert
 - recent history
