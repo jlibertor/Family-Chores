@@ -1,14 +1,20 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
+import { avatars, defaultAvatarId, getAvatar } from './avatars'
+import { bugDefinitions, getBugDefinition } from './bugs'
+import { AquariumFriendsView, AquariumView, type AquariumData } from './components/aquarium/AquariumView'
+import { BugPhysicsBox, type ActiveBugViewModel } from './components/bugs/BugPhysicsBox'
 
 type MemberType = 'adult' | 'child'
-type FrequencyType = 'daily' | 'weekly' | 'monthly' | 'as_needed'
+type FrequencyType = 'daily' | 'weekdays' | 'weekends' | 'weekly' | 'monthly' | 'as_needed'
 type NoteType = 'note' | 'shopping' | 'reminder'
 type AssignmentMode = 'household_anyone' | 'assigned_individual' | 'per_person'
 
 type Member = {
   id: number
   display_name: string
+  nickname: string | null
+  avatar_id: string | null
   member_type: MemberType
   sort_order: number
   active: 0 | 1
@@ -22,28 +28,47 @@ type Chore = {
   assignment_mode: AssignmentMode
   assigned_member_id: number | null
   assigned_member_name?: string | null
+  assigned_member_avatar_id?: string | null
   assignment_member_ids?: string | null
   assignment_member_names?: string | null
+  assignment_member_avatar_ids?: string | null
   responsible_member_id?: number | null
   responsible_member_name?: string | null
+  responsible_member_avatar_id?: string | null
   alert_if_overdue: 0 | 1
   needs_reminder: 0 | 1
+  feeds_aquarium: 0 | 1
   active: 0 | 1
   is_due: 0 | 1
   is_overdue: 0 | 1
   last_completed_at: string | null
   last_completed_by: string | null
+  last_completed_by_avatar_id?: string | null
 }
 
 type Completion = {
   id: number
   member_name: string
+  member_avatar_id: string | null
   responsible_member_name: string | null
+  responsible_member_avatar_id: string | null
   chore_name: string
   completed_at: string
   session_mode: 'member' | 'kiosk' | 'admin' | null
   device_label: string | null
   notes: string | null
+}
+
+type EarnedBug = {
+  id: number
+  family_member_id: number
+  bug_id: string
+  chore_id: number
+  completion_id: number
+  earned_at: string
+  expires_at: string
+  removed_at?: string | null
+  removed_reason?: string | null
 }
 
 type SessionState = {
@@ -59,28 +84,6 @@ type TodayState = {
   completedToday: Completion[]
 }
 
-type HouseholdStatus = {
-  weekly: {
-    totalCompleted: number
-    byMember: Array<{
-      member_id: number
-      member_name: string
-      completed_count: number
-      points: number
-    }>
-    mostActive: {
-      member_name: string
-      completed_count: number
-      points: number
-    } | null
-  }
-  reminders: Chore[]
-  suggestions: Array<{
-    chore_id: number
-    message: string
-  }>
-}
-
 type HouseholdNote = {
   id: number
   note_type: NoteType
@@ -92,6 +95,8 @@ type HouseholdNote = {
 type MemberDraft = {
   id: number | null
   display_name: string
+  nickname: string
+  avatar_id: string
   member_type: MemberType
   sort_order: number
   active: 0 | 1
@@ -107,6 +112,7 @@ type ChoreDraft = {
   assigned_member_id: number | ''
   alert_if_overdue: 0 | 1
   needs_reminder: 0 | 1
+  feeds_aquarium: 0 | 1
   active: 0 | 1
 }
 
@@ -117,16 +123,40 @@ type NoteDraft = {
   active: 0 | 1
 }
 
+type AquariumConfigDraft = {
+  food_reserve: number
+  starting_food_reserve: number
+  max_food_reserve: number
+  daily_food_consumption: number
+  creature_unlock_interval: number
+  egg_incubation_minutes: number
+  growth_days: number
+}
+
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
+type HistoryRange = 'today' | '7d' | '30d'
 
 const memberKey = 'family-chores.member-id'
 const sessionKey = 'family-chores.session'
+const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') ?? ''
+const idleRedirectMs = 3 * 60 * 1000
 
-const routes = ['/today', '/display', '/notes', '/choose-mode', '/member', '/kiosk', '/history', '/admin'] as const
+const routes = ['/today', '/display', '/aquarium', '/aquarium-friends', '/choose-mode', '/member', '/kiosk', '/history', '/bug-box', '/admin'] as const
+
+function currentTimestamp() {
+  return Date.now()
+}
+
+function markIdleActivity(lastActivityRef: { current: number }, setIdleRemainingMs: (value: number) => void) {
+  lastActivityRef.current = currentTimestamp()
+  setIdleRemainingMs(idleRedirectMs)
+}
 
 const emptyMemberDraft: MemberDraft = {
   id: null,
   display_name: '',
+  nickname: '',
+  avatar_id: defaultAvatarId,
   member_type: 'child',
   sort_order: 10,
   active: 1,
@@ -142,6 +172,7 @@ const emptyChoreDraft: ChoreDraft = {
   assigned_member_id: '',
   alert_if_overdue: 0,
   needs_reminder: 0,
+  feeds_aquarium: 1,
   active: 1,
 }
 
@@ -152,8 +183,112 @@ const emptyNoteDraft: NoteDraft = {
   active: 1,
 }
 
+const defaultAquariumConfigDraft: AquariumConfigDraft = {
+  food_reserve: 14,
+  starting_food_reserve: 14,
+  max_food_reserve: 30,
+  daily_food_consumption: 4,
+  creature_unlock_interval: 25,
+  egg_incubation_minutes: 60,
+  growth_days: 7,
+}
+
 function isKnownRoute(pathname: string) {
   return routes.includes(pathname as (typeof routes)[number])
+}
+
+function displayFamilyMemberPublic(member: Pick<Member, 'display_name' | 'nickname'>) {
+  return member.nickname?.trim() || member.display_name
+}
+
+function displayNicknameForAdmin(nickname: string | null | undefined) {
+  if (!nickname?.trim()) return ''
+  return nickname.trim().length > 20 ? `${nickname.trim().slice(0, 20)}…` : nickname.trim()
+}
+
+function displayFamilyMemberForSetup(member: Pick<Member, 'display_name' | 'nickname'>) {
+  const nickname = displayNicknameForAdmin(member.nickname)
+  return nickname ? `${member.display_name} (${nickname})` : member.display_name
+}
+
+function AvatarIcon({
+  avatarId,
+  name,
+  size = 'medium',
+}: {
+  avatarId: string | null | undefined
+  name: string
+  size?: 'small' | 'medium' | 'large'
+}) {
+  const avatar = getAvatar(avatarId)
+
+  return (
+    <img
+      className={`avatar-icon avatar-icon-${size}`}
+      src={avatar.file}
+      alt={`${name} avatar`}
+      width={size === 'large' ? 72 : size === 'small' ? 36 : 48}
+      height={size === 'large' ? 72 : size === 'small' ? 36 : 48}
+    />
+  )
+}
+
+function AvatarPicker({
+  value,
+  onChange,
+}: {
+  value: string
+  onChange: (avatarId: string) => void
+}) {
+  return (
+    <fieldset className="avatar-picker">
+      <legend>Avatar</legend>
+      <div className="avatar-picker-grid">
+        {avatars.map((avatar) => {
+          const selected = avatar.id === value
+          return (
+            <button
+              key={avatar.id}
+              type="button"
+              className={`avatar-choice${selected ? ' selected' : ''}`}
+              aria-pressed={selected}
+              aria-label={`${avatar.displayName} avatar`}
+              onClick={() => onChange(avatar.id)}
+            >
+              <img src={avatar.file} alt="" aria-hidden="true" width={56} height={56} />
+              <span>{avatar.displayName}</span>
+            </button>
+          )
+        })}
+      </div>
+    </fieldset>
+  )
+}
+
+function BugIcon({
+  bugId,
+  size = 'medium',
+}: {
+  bugId: string | null | undefined
+  size?: 'small' | 'medium' | 'large'
+}) {
+  const bug = getBugDefinition(bugId)
+
+  return (
+    <img
+      className={`bug-icon bug-icon-${size}`}
+      src={bug.file}
+      alt={`${bug.displayName} bug`}
+      width={size === 'large' ? 96 : size === 'small' ? 40 : 64}
+      height={size === 'large' ? 96 : size === 'small' ? 40 : 64}
+    />
+  )
+}
+
+function ActivityDayBadge({ value }: { value: string }) {
+  const day = activityDayLabel(value)
+
+  return <span className={`activity-day-badge ${day.kind}`}>{day.label}</span>
 }
 
 async function api<T>(path: string, options?: RequestInit, attempts = 2): Promise<T> {
@@ -161,7 +296,7 @@ async function api<T>(path: string, options?: RequestInit, attempts = 2): Promis
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      const response = await fetch(path, {
+      const response = await fetch(`${apiBaseUrl}${path}`, {
         headers: {
           'Content-Type': 'application/json',
           ...options?.headers,
@@ -202,23 +337,29 @@ function getStoredSession() {
 
 function App() {
   const [route, setRoute] = useState(() =>
-    isKnownRoute(window.location.pathname) ? window.location.pathname : '/today',
+    isKnownRoute(window.location.pathname) ? window.location.pathname : '/aquarium',
   )
+  const routeRef = useRef(route)
+  const lastActivityRef = useRef(0)
   const [members, setMembers] = useState<Member[]>([])
   const [chores, setChores] = useState<Chore[]>([])
   const [memberChores, setMemberChores] = useState<Chore[]>([])
   const [kioskChores, setKioskChores] = useState<Chore[]>([])
+  const [memberBugs, setMemberBugs] = useState<EarnedBug[]>([])
+  const [bugBoxMemberId, setBugBoxMemberId] = useState<number | null>(null)
   const [history, setHistory] = useState<Completion[]>([])
   const [notes, setNotes] = useState<HouseholdNote[]>([])
+  const [aquarium, setAquarium] = useState<AquariumData | null>(null)
   const [today, setToday] = useState<TodayState>({ due: [], overdue: [], completedToday: [] })
-  const [status, setStatus] = useState<HouseholdStatus>({
-    weekly: { totalCompleted: 0, byMember: [], mostActive: null },
-    reminders: [],
-    suggestions: [],
-  })
   const [loadState, setLoadState] = useState<LoadState>('idle')
   const [error, setError] = useState('')
   const [selectedMemberId, setSelectedMemberId] = useState<number | null>(() => {
+    const storedSession = getStoredSession()
+    if (storedSession?.mode === 'kiosk') {
+      localStorage.removeItem(memberKey)
+      return null
+    }
+
     const stored = Number(localStorage.getItem(memberKey))
     return Number.isInteger(stored) && stored > 0 ? stored : null
   })
@@ -226,6 +367,7 @@ function App() {
   const [pendingChore, setPendingChore] = useState<Chore | null>(null)
   const [kioskMemberId, setKioskMemberId] = useState<number | null>(null)
   const [successMessage, setSuccessMessage] = useState('')
+  const [successBugId, setSuccessBugId] = useState<string | null>(null)
   const [adminPin, setAdminPin] = useState('')
   const [adminUnlocked, setAdminUnlocked] = useState(false)
   const [adminMembers, setAdminMembers] = useState<Member[]>([])
@@ -234,13 +376,14 @@ function App() {
   const [memberDraft, setMemberDraft] = useState<MemberDraft>(emptyMemberDraft)
   const [choreDraft, setChoreDraft] = useState<ChoreDraft>(emptyChoreDraft)
   const [noteDraft, setNoteDraft] = useState<NoteDraft>(emptyNoteDraft)
-  const [quickNoteDraft, setQuickNoteDraft] = useState<NoteDraft>(emptyNoteDraft)
+  const [aquariumConfigDraft, setAquariumConfigDraft] = useState<AquariumConfigDraft>(defaultAquariumConfigDraft)
   const [submitting, setSubmitting] = useState(false)
   const [completionNote, setCompletionNote] = useState('')
-  const [notificationsEnabled, setNotificationsEnabled] = useState(
+  const [notificationsEnabled] = useState(
     () => 'Notification' in window && Notification.permission === 'granted',
   )
   const [currentTime, setCurrentTime] = useState(() => new Date())
+  const [idleRemainingMs, setIdleRemainingMs] = useState(idleRedirectMs)
 
   const selectedMember = useMemo(
     () => members.find((member) => member.id === selectedMemberId) ?? null,
@@ -250,31 +393,49 @@ function App() {
     () => members.find((member) => member.id === kioskMemberId) ?? null,
     [members, kioskMemberId],
   )
+  const isMemberBugBoxLocked = Boolean(selectedMemberId) && session?.mode !== 'kiosk'
+  const activeBugBoxMemberId = isMemberBugBoxLocked ? selectedMemberId : bugBoxMemberId
+  const canSwitchBugBoxMember = !isMemberBugBoxLocked
+  const bugBoxMember = useMemo(
+    () => members.find((member) => member.id === activeBugBoxMemberId) ?? null,
+    [activeBugBoxMemberId, members],
+  )
   const memberDueChores = sortChoresForHousehold(memberChores.filter((chore) => chore.is_due === 1))
   const memberOtherChores = sortChoresForHousehold(memberChores.filter((chore) => chore.is_due !== 1))
   const kioskDueChores = sortChoresForHousehold(kioskChores.filter((chore) => chore.is_due === 1))
   const kioskOtherChores = sortChoresForHousehold(kioskChores.filter((chore) => chore.is_due !== 1))
+  const deviceViewLabel = session?.mode === 'kiosk' ? 'Kiosk view' : selectedMemberId ? 'My view' : 'Login'
+  const householdSessionLabel = session?.mode === 'kiosk' ? 'Kiosk' : selectedMember ? displayFamilyMemberPublic(selectedMember) : ''
+  const canAccessSetup = selectedMember?.member_type === 'adult' && session?.mode !== 'kiosk'
+
+  function resetIdleTimer() {
+    markIdleActivity(lastActivityRef, setIdleRemainingMs)
+  }
 
   function navigate(nextRoute: string) {
+    resetIdleTimer()
     window.history.pushState({}, '', nextRoute)
     setRoute(nextRoute)
     setError('')
     setPendingChore(null)
     setSuccessMessage('')
+    setSuccessBugId(null)
   }
 
-  async function refreshHousehold() {
-    setLoadState('loading')
+  async function refreshHousehold(silent = false) {
+    if (!silent) {
+      setLoadState('loading')
+    }
     setError('')
 
     try {
-      const [memberData, choreData, todayData, statusData, noteData, historyData] = await Promise.all([
+      const [memberData, choreData, todayData, noteData, historyData, aquariumData] = await Promise.all([
         api<{ ok: boolean; members: Member[] }>('/api/members'),
         api<{ ok: boolean; chores: Chore[] }>('/api/chores'),
         api<TodayState & { ok: boolean }>('/api/today'),
-        api<HouseholdStatus & { ok: boolean }>('/api/status'),
         api<{ ok: boolean; notes: HouseholdNote[] }>('/api/notes'),
         api<{ ok: boolean; completions: Completion[] }>('/api/completions/recent'),
+        api<{ ok: boolean; aquarium: AquariumData }>('/api/aquarium'),
       ])
 
       setMembers(memberData.members)
@@ -284,13 +445,32 @@ function App() {
         overdue: todayData.overdue,
         completedToday: todayData.completedToday,
       })
-      setStatus({
-        weekly: statusData.weekly,
-        reminders: statusData.reminders,
-        suggestions: statusData.suggestions,
-      })
       setNotes(noteData.notes)
       setHistory(historyData.completions)
+      setAquarium(aquariumData.aquarium)
+
+      const activeMemberIds = new Set(memberData.members.map((member) => member.id))
+
+      if (selectedMemberId && activeMemberIds.has(selectedMemberId)) {
+        setMemberChores(await loadChoresForMember(selectedMemberId))
+      } else if (selectedMemberId) {
+        localStorage.removeItem(memberKey)
+        setSelectedMemberId(null)
+        setMemberChores([])
+        setSession((current) => {
+          if (current?.mode !== 'member') return current
+          localStorage.removeItem(sessionKey)
+          return null
+        })
+      }
+
+      if (kioskMemberId && activeMemberIds.has(kioskMemberId)) {
+        setKioskChores(await loadChoresForMember(kioskMemberId))
+      } else if (kioskMemberId) {
+        setKioskMemberId(null)
+        setKioskChores([])
+      }
+
       setLoadState('ready')
     } catch (currentError) {
       setError(currentError instanceof Error ? currentError.message : 'Could not load app data.')
@@ -299,7 +479,7 @@ function App() {
   }
 
   async function loadAdminData(pin = adminPin) {
-    const [memberData, choreData, noteData] = await Promise.all([
+    const [memberData, choreData, noteData, aquariumConfigData] = await Promise.all([
       api<{ ok: boolean; members: Member[] }>('/api/admin/members', {
         headers: { 'X-Parent-Pin': pin },
       }),
@@ -309,11 +489,15 @@ function App() {
       api<{ ok: boolean; notes: HouseholdNote[] }>('/api/admin/notes', {
         headers: { 'X-Parent-Pin': pin },
       }),
+      api<{ ok: boolean; config: AquariumConfigDraft }>('/api/admin/aquarium-config', {
+        headers: { 'X-Parent-Pin': pin },
+      }),
     ])
 
     setAdminMembers(memberData.members)
     setAdminChores(choreData.chores)
     setAdminNotes(noteData.notes)
+    setAquariumConfigDraft(toAquariumConfigDraft(aquariumConfigData.config))
   }
 
   async function loadChoresForMember(memberId: number) {
@@ -321,18 +505,81 @@ function App() {
     return data.chores
   }
 
+  async function loadBugsForMember(memberId: number) {
+    const data = await api<{ ok: boolean; bugs: EarnedBug[] }>(`/api/members/${memberId}/bugs`)
+    return data.bugs
+  }
+
+  async function removeEarnedBug(earnedBugId: string) {
+    await api<{ ok: boolean; bug: EarnedBug }>(`/api/bugs/${earnedBugId}/remove`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: 'overclicked' }),
+    })
+
+    setMemberBugs((current) => current.filter((bug) => String(bug.id) !== earnedBugId))
+  }
+
   useEffect(() => {
     void Promise.resolve().then(() => refreshHousehold())
     const clock = window.setInterval(() => setCurrentTime(new Date()), 30_000)
+    const refresh = window.setInterval(() => {
+      void refreshHousehold(true)
+    }, 20_000)
 
     const onPopState = () => {
-      setRoute(isKnownRoute(window.location.pathname) ? window.location.pathname : '/today')
+      const nextRoute = isKnownRoute(window.location.pathname) ? window.location.pathname : '/aquarium'
+      setRoute(nextRoute)
+      resetIdleTimer()
     }
 
     window.addEventListener('popstate', onPopState)
     return () => {
       window.clearInterval(clock)
+      window.clearInterval(refresh)
       window.removeEventListener('popstate', onPopState)
+    }
+  }, [])
+
+  useEffect(() => {
+    routeRef.current = route
+  }, [route])
+
+  useEffect(() => {
+    const activityEvents: Array<keyof WindowEventMap> = ['pointerdown', 'keydown', 'touchstart', 'scroll']
+    const onActivity = () => resetIdleTimer()
+    resetIdleTimer()
+
+    for (const eventName of activityEvents) {
+      window.addEventListener(eventName, onActivity, { passive: true })
+    }
+
+    const countdown = window.setInterval(() => {
+      const remaining = Math.max(0, idleRedirectMs - (currentTimestamp() - lastActivityRef.current))
+      setIdleRemainingMs(remaining)
+
+      if (remaining > 0) {
+        return
+      }
+
+      if (routeRef.current === '/aquarium') {
+        markIdleActivity(lastActivityRef, setIdleRemainingMs)
+        return
+      }
+
+      markIdleActivity(lastActivityRef, setIdleRemainingMs)
+      window.history.pushState({}, '', '/aquarium')
+      setRoute('/aquarium')
+      setError('')
+      setPendingChore(null)
+      setSuccessMessage('')
+      setSuccessBugId(null)
+    }, 1_000)
+
+    return () => {
+      for (const eventName of activityEvents) {
+        window.removeEventListener(eventName, onActivity)
+      }
+      window.clearInterval(countdown)
     }
   }, [])
 
@@ -360,6 +607,19 @@ function App() {
       )
   }, [kioskMemberId])
 
+  useEffect(() => {
+    if (!activeBugBoxMemberId) {
+      void Promise.resolve().then(() => setMemberBugs([]))
+      return
+    }
+
+    void loadBugsForMember(activeBugBoxMemberId)
+      .then(setMemberBugs)
+      .catch((currentError) =>
+        setError(currentError instanceof Error ? currentError.message : 'Could not load Bug Box.'),
+      )
+  }, [activeBugBoxMemberId])
+
   async function chooseMemberDevice(memberId: number) {
     setError('')
 
@@ -369,19 +629,35 @@ function App() {
         method: 'POST',
         body: JSON.stringify({
           memberId,
-          deviceLabel: member ? `${member.display_name} Device` : 'Personal Device',
+          deviceLabel: member ? `${displayFamilyMemberPublic(member)} Device` : 'Personal Device',
         }),
       })
 
       localStorage.setItem(memberKey, String(memberId))
       localStorage.setItem(sessionKey, JSON.stringify(data.session))
       setMemberChores([])
+      setBugBoxMemberId(null)
+      setKioskChores([])
+      setKioskMemberId(null)
       setSelectedMemberId(memberId)
       setSession(data.session)
       navigate('/member')
     } catch (currentError) {
       setError(currentError instanceof Error ? currentError.message : 'Could not select this member.')
     }
+  }
+
+  function changeMemberDevice() {
+    localStorage.removeItem(memberKey)
+    if (session?.mode === 'member') {
+      localStorage.removeItem(sessionKey)
+      setSession(null)
+    }
+    setSelectedMemberId(null)
+    setBugBoxMemberId(null)
+    setMemberChores([])
+    setPendingChore(null)
+    setCompletionNote('')
   }
 
   async function chooseKioskDevice() {
@@ -393,7 +669,11 @@ function App() {
         body: JSON.stringify({ deviceLabel: 'Kitchen Tablet' }),
       })
 
+      localStorage.removeItem(memberKey)
       localStorage.setItem(sessionKey, JSON.stringify(data.session))
+      setSelectedMemberId(null)
+      setMemberChores([])
+      setBugBoxMemberId(null)
       setSession(data.session)
       setKioskMemberId(null)
       navigate('/kiosk')
@@ -402,12 +682,22 @@ function App() {
     }
   }
 
+  function logoutKioskMode() {
+    localStorage.removeItem(sessionKey)
+    setSession(null)
+    setKioskMemberId(null)
+    setKioskChores([])
+    setPendingChore(null)
+    setCompletionNote('')
+    navigate('/choose-mode')
+  }
+
   async function submitCompletion(memberId: number, chore: Chore, mode: 'member' | 'kiosk') {
     setError('')
     setSubmitting(true)
 
     try {
-      await api('/api/completions', {
+      const data = await api<{ ok: boolean; earnedBug?: EarnedBug; aquariumEvent?: { fedMessage: string; state: AquariumData['state']; egg: unknown | null } }>('/api/completions', {
         method: 'POST',
         body: JSON.stringify({
           memberId,
@@ -420,12 +710,20 @@ function App() {
     })
 
       const member = members.find((item) => item.id === memberId)
-      setSuccessMessage(`${member?.display_name ?? 'Someone'} completed ${chore.name}.`)
-      maybeShowCompletionNotification(member?.display_name ?? 'Someone', chore.name)
+      const memberName = member ? displayFamilyMemberPublic(member) : 'Someone'
+      const bug = data.earnedBug ? getBugDefinition(data.earnedBug.bug_id) : null
+      const completionMessage = data.aquariumEvent
+        ? `${memberName} fed the aquarium${bug ? ` and caught a ${bug.displayName}!` : '!'}`
+        : `${memberName} completed ${chore.name}${bug ? ` and caught a ${bug.displayName}!` : '!'}`
+      setSuccessMessage(completionMessage)
+      setSuccessBugId(bug?.id ?? null)
+      maybeShowCompletionNotification(memberName, chore.name)
       setPendingChore(null)
       setCompletionNote('')
       await refreshHousehold()
       const refreshedChores = await loadChoresForMember(memberId)
+      const refreshedBugs = await loadBugsForMember(memberId)
+      setMemberBugs(refreshedBugs)
 
       if (mode === 'kiosk') {
         setKioskChores(refreshedChores)
@@ -470,7 +768,9 @@ function App() {
   }
 
   async function deleteMember(member: Member) {
-    if (!window.confirm(`Delete ${member.display_name}? Their old history will be kept, but they will leave setup lists and active app screens.`)) {
+    const memberName = displayFamilyMemberForSetup(member)
+
+    if (!window.confirm(`Delete ${memberName}? Their old history will be kept, but they will leave setup lists and active app screens.`)) {
       return
     }
 
@@ -489,7 +789,7 @@ function App() {
 
       setMemberDraft(emptyMemberDraft)
       await Promise.all([loadAdminData(), refreshHousehold()])
-      setSuccessMessage(`${member.display_name} deleted from active family members.`)
+      setSuccessMessage(`${memberName} deleted from active family members.`)
     } catch (currentError) {
       setError(currentError instanceof Error ? currentError.message : 'Could not delete family member.')
     }
@@ -557,19 +857,20 @@ function App() {
     }
   }
 
-  async function saveQuickNote() {
+  async function saveAquariumConfig() {
     setError('')
 
     try {
-      await api('/api/notes', {
-        method: 'POST',
-        body: JSON.stringify(quickNoteDraft),
+      const data = await api<{ ok: boolean; config: AquariumConfigDraft }>('/api/admin/aquarium-config', {
+        method: 'PUT',
+        headers: { 'X-Parent-Pin': adminPin },
+        body: JSON.stringify(aquariumConfigDraft),
       })
-      setQuickNoteDraft(emptyNoteDraft)
-      await refreshHousehold()
-      setSuccessMessage('Household note added.')
+      setAquariumConfigDraft(toAquariumConfigDraft(data.config))
+      await Promise.all([loadAdminData(), refreshHousehold()])
+      setSuccessMessage('Aquarium tuning saved.')
     } catch (currentError) {
-      setError(currentError instanceof Error ? currentError.message : 'Could not add household note.')
+      setError(currentError instanceof Error ? currentError.message : 'Could not save aquarium tuning.')
     }
   }
 
@@ -593,35 +894,6 @@ function App() {
     }
   }
 
-  function quickCompleteByName(choreNames: string[]) {
-    if (!selectedMember) {
-      setError('Choose a member device before using quick actions.')
-      navigate('/member')
-      return
-    }
-
-    const chore = chores.find((item) => choreNames.includes(item.name) && item.active === 1)
-    if (!chore) {
-      setError('That quick action does not match an active chore.')
-      return
-    }
-
-    void submitCompletion(selectedMember.id, chore, 'member')
-  }
-
-  async function enableNotifications() {
-    if (!('Notification' in window)) {
-      setError('This browser does not support notifications.')
-      return
-    }
-
-    const permission = await Notification.requestPermission()
-    setNotificationsEnabled(permission === 'granted')
-    if (permission === 'granted') {
-      new Notification('Family Chores reminders enabled')
-    }
-  }
-
   function maybeShowCompletionNotification(memberName: string, choreName: string) {
     if (notificationsEnabled && 'Notification' in window && Notification.permission === 'granted') {
       new Notification('Chore completed', {
@@ -630,51 +902,72 @@ function App() {
     }
   }
 
+  function openDeviceView() {
+    if (session?.mode === 'kiosk') {
+      navigate('/kiosk')
+      return
+    }
+
+    if (selectedMemberId) {
+      navigate('/member')
+      return
+    }
+
+    navigate('/choose-mode')
+  }
+
   return (
     <main className="app-shell">
       <header className="top-bar">
-        <button type="button" className="brand-button" onClick={() => navigate('/today')}>
+        <button type="button" className="brand-button" onClick={() => navigate('/aquarium')}>
           Family Chores
         </button>
         <nav aria-label="Main navigation">
-          <button type="button" onClick={() => navigate('/today')}>Today</button>
-          <button type="button" onClick={() => navigate('/display')}>Display</button>
-          <button type="button" onClick={() => navigate('/notes')}>Notes</button>
-          <button type="button" onClick={() => navigate('/member')}>Member</button>
-          <button type="button" onClick={() => navigate('/kiosk')}>Kiosk</button>
-          <button type="button" onClick={() => navigate('/history')}>History</button>
-          <button type="button" onClick={() => navigate('/admin')}>Setup</button>
+          <button type="button" onClick={() => navigate('/aquarium')}>Aquarium</button>
+          <button type="button" onClick={() => navigate('/aquarium-friends')}>Friends</button>
+          <button type="button" onClick={() => navigate('/display')}>Household</button>
+          <button type="button" onClick={openDeviceView}>{deviceViewLabel}</button>
+          <button type="button" onClick={() => navigate('/bug-box')}>Bug Box</button>
+          {canAccessSetup && <button type="button" onClick={() => navigate('/admin')}>Setup</button>}
         </nav>
+        <span className="idle-countdown" aria-live="polite">
+          Aquarium in {formatIdleCountdown(idleRemainingMs)}
+        </span>
       </header>
 
       {loadState === 'loading' && <p className="notice">Loading household data...</p>}
       {error && <p className="notice error">{error}</p>}
-      {successMessage && <p className="notice success">{successMessage}</p>}
+      {successMessage && (
+        <p className="notice success reward-notice">
+          {successBugId && <BugIcon bugId={successBugId} size="small" />}
+          <span>{successMessage}</span>
+        </p>
+      )}
 
-      {route === '/today' && (
-        <TodayView
-          today={today}
-          chores={chores}
-          status={status}
-          history={history}
-          selectedMemberName={selectedMember?.display_name ?? null}
-          notificationsEnabled={notificationsEnabled}
-          onEnableNotifications={() => void enableNotifications()}
-          onQuickComplete={quickCompleteByName}
-          onStart={() => navigate('/choose-mode')}
+      {route === '/aquarium' && (
+        <AquariumView
+          aquarium={aquarium}
+          onRecord={() => navigate('/choose-mode')}
+          onFriends={() => navigate('/aquarium-friends')}
         />
       )}
 
-      {route === '/display' && (
-        <DisplayView today={today} status={status} notes={notes} history={history} currentTime={currentTime} />
-      )}
+      {route === '/aquarium-friends' && <AquariumFriendsView aquarium={aquarium} />}
 
-      {route === '/notes' && (
-        <NotesView
+      {(route === '/display' || route === '/today') && (
+        <HouseholdDashboard
+          today={today}
+          members={members}
           notes={notes}
-          draft={quickNoteDraft}
-          onDraftChange={setQuickNoteDraft}
-          onSave={() => void saveQuickNote()}
+          history={history}
+          currentTime={currentTime}
+          sessionLabel={householdSessionLabel}
+          selectedMember={selectedMember}
+          memberChores={memberChores}
+          memberBugs={selectedMember ? memberBugs : []}
+          onRecord={() => navigate('/choose-mode')}
+          onHistory={() => navigate('/history')}
+          onBugBox={() => navigate('/bug-box')}
         />
       )}
 
@@ -691,8 +984,9 @@ function App() {
               <p>Pick a family member and this browser will remember them.</p>
               <div className="button-grid">
                 {members.map((member) => (
-                  <button key={member.id} type="button" onClick={() => void chooseMemberDevice(member.id)}>
-                    {member.display_name}
+                  <button key={member.id} type="button" className="member-choice" onClick={() => void chooseMemberDevice(member.id)}>
+                    <AvatarIcon avatarId={member.avatar_id} name={displayFamilyMemberPublic(member)} size="medium" />
+                    <span>{displayFamilyMemberPublic(member)}</span>
                   </button>
                 ))}
               </div>
@@ -713,14 +1007,27 @@ function App() {
         <section className="screen">
           <div className="screen-heading">
             <p className="eyebrow">Member mode</p>
-            <h1>{selectedMember ? selectedMember.display_name : 'Choose your name'}</h1>
+            <div className="member-heading-row">
+              <h1 className="avatar-heading">
+                {selectedMember && (
+                  <AvatarIcon avatarId={selectedMember.avatar_id} name={displayFamilyMemberPublic(selectedMember)} size="large" />
+                )}
+                <span>{selectedMember ? displayFamilyMemberPublic(selectedMember) : 'Choose your name'}</span>
+              </h1>
+              {selectedMember && (
+                <button type="button" className="secondary-action member-change-action" onClick={changeMemberDevice}>
+                  Change member
+                </button>
+              )}
+            </div>
           </div>
 
           {!selectedMember && (
             <div className="button-grid">
               {members.map((member) => (
-                <button key={member.id} type="button" onClick={() => void chooseMemberDevice(member.id)}>
-                  {member.display_name}
+                <button key={member.id} type="button" className="member-choice" onClick={() => void chooseMemberDevice(member.id)}>
+                  <AvatarIcon avatarId={member.avatar_id} name={displayFamilyMemberPublic(member)} size="medium" />
+                  <span>{displayFamilyMemberPublic(member)}</span>
                 </button>
               ))}
             </div>
@@ -731,7 +1038,8 @@ function App() {
               dueChores={memberDueChores}
               otherChores={memberOtherChores}
               pendingChore={pendingChore}
-              memberName={selectedMember.display_name}
+              memberName={displayFamilyMemberPublic(selectedMember)}
+              memberAvatarId={selectedMember.avatar_id}
               onPick={setPendingChore}
               onCancel={() => {
                 setPendingChore(null)
@@ -750,12 +1058,16 @@ function App() {
         <section className="screen kiosk-screen">
           <div className="screen-heading">
             <p className="eyebrow">Kiosk mode</p>
-            <h1>{kioskMember ? kioskMember.display_name : 'Who finished a chore?'}</h1>
+            <h1 className="avatar-heading">
+              {kioskMember && (
+                <AvatarIcon avatarId={kioskMember.avatar_id} name={displayFamilyMemberPublic(kioskMember)} size="large" />
+              )}
+              <span>{kioskMember ? displayFamilyMemberPublic(kioskMember) : 'Who finished a chore?'}</span>
+            </h1>
           </div>
 
           {!kioskMember && (
             <>
-              <KioskStatus today={today} status={status} currentTime={currentTime} />
               <div className="button-grid large">
                 {members.map((member) => (
                   <button
@@ -766,10 +1078,14 @@ function App() {
                       setKioskMemberId(member.id)
                     }}
                   >
-                    {member.display_name}
+                    <AvatarIcon avatarId={member.avatar_id} name={displayFamilyMemberPublic(member)} size="medium" />
+                    <span>{displayFamilyMemberPublic(member)}</span>
                   </button>
                 ))}
               </div>
+              <button type="button" className="secondary-action kiosk-logout-action" onClick={logoutKioskMode}>
+                Log out of kiosk mode
+              </button>
             </>
           )}
 
@@ -782,7 +1098,8 @@ function App() {
                 dueChores={kioskDueChores}
                 otherChores={kioskOtherChores}
                 pendingChore={pendingChore}
-                memberName={kioskMember.display_name}
+                memberName={displayFamilyMemberPublic(kioskMember)}
+                memberAvatarId={kioskMember.avatar_id}
                 onPick={setPendingChore}
                 onCancel={() => {
                   setPendingChore(null)
@@ -798,9 +1115,21 @@ function App() {
         </section>
       )}
 
-      {route === '/history' && <HistoryView history={history} />}
+      {route === '/history' && <HistoryView history={history} members={members} chores={chores} />}
 
-      {route === '/admin' && (
+      {route === '/bug-box' && (
+        <BugBoxView
+          members={members}
+          selectedMember={bugBoxMember}
+          bugs={memberBugs}
+          selectedMemberId={activeBugBoxMemberId}
+          canSwitchMembers={canSwitchBugBoxMember}
+          onSelectMember={setBugBoxMemberId}
+          onExplodeBug={removeEarnedBug}
+        />
+      )}
+
+      {route === '/admin' && canAccessSetup && (
         <AdminView
           pin={adminPin}
           unlocked={adminUnlocked}
@@ -809,291 +1138,218 @@ function App() {
           memberDraft={memberDraft}
           choreDraft={choreDraft}
           noteDraft={noteDraft}
+          aquariumConfigDraft={aquariumConfigDraft}
           notes={adminNotes}
           onPinChange={setAdminPin}
           onUnlock={() => void unlockAdmin()}
           onMemberDraftChange={setMemberDraft}
           onChoreDraftChange={setChoreDraft}
           onNoteDraftChange={setNoteDraft}
+          onAquariumConfigDraftChange={setAquariumConfigDraft}
           onSaveMember={() => void saveMember()}
           onDeleteMember={(member) => void deleteMember(member)}
           onSaveChore={() => void saveChore()}
           onDeleteChore={(chore) => void deleteChore(chore)}
           onSaveNote={() => void saveNote()}
+          onSaveAquariumConfig={() => void saveAquariumConfig()}
           onExport={() => void exportHouseholdData()}
         />
+      )}
+
+      {route === '/admin' && !canAccessSetup && (
+        <section className="screen">
+          <div className="screen-heading">
+            <p className="eyebrow">Setup</p>
+            <h1>Parent setup</h1>
+            <p className="empty-state">Log in as an adult to open setup.</p>
+          </div>
+        </section>
       )}
     </main>
   )
 }
 
-function DisplayView({
+function HouseholdDashboard({
   today,
-  status,
+  members,
   notes,
   history,
   currentTime,
+  sessionLabel,
+  selectedMember,
+  memberChores,
+  memberBugs,
+  onRecord,
+  onHistory,
+  onBugBox,
 }: {
   today: TodayState
-  status: HouseholdStatus
+  members: Member[]
   notes: HouseholdNote[]
   history: Completion[]
   currentTime: Date
+  sessionLabel: string
+  selectedMember: Member | null
+  memberChores: Chore[]
+  memberBugs: EarnedBug[]
+  onRecord: () => void
+  onHistory: () => void
+  onBugBox: () => void
 }) {
-  const isLowLight = currentTime.getHours() < 6 || currentTime.getHours() >= 21
+  const attentionChores = getNeedsAttention(today)
+  const rhythmMessage = getHouseholdRhythmMessage(today)
+  const helpers = getTodayContributions(members, today.completedToday)
+  const selectedMemberName = selectedMember ? displayFamilyMemberPublic(selectedMember) : null
+  const selectedMemberDone = memberChores.filter((chore) => chore.last_completed_at && relativeDate(chore.last_completed_at) === 'today')
+  const selectedMemberOpen = sortChoresForHousehold(memberChores.filter((chore) => chore.is_due === 1 || chore.is_overdue === 1))
+  const recentActivity = getRecentActivity(history, 6)
 
   return (
-    <section className={`display-screen${isLowLight ? ' low-light' : ''}`}>
-      <div className="display-hero">
-        <p>{formatLongDate(currentTime)}</p>
-        <h1>{formatClock(currentTime)}</h1>
+    <section className="screen household-dashboard">
+      <section className="household-header">
+        <div>
+          <p className="eyebrow">{formatCompactDateTime(currentTime)}</p>
+          <h1>Household view</h1>
+          {sessionLabel && <p>{sessionLabel}</p>}
+        </div>
+        <strong>
+          {today.overdue.length} overdue • {today.due.length} due today • {today.completedToday.length} completed today
+        </strong>
+      </section>
+
+      <div className="action-row">
+        <button type="button" className="primary-action" onClick={onRecord}>
+          Record a chore
+        </button>
+        <button type="button" className="secondary-action" onClick={onHistory}>
+          View history
+        </button>
       </div>
-      <div className="display-grid">
-        <ReadOnlyChoreSection title="Overdue" chores={today.overdue} emptyText="Nothing overdue." />
-        <ReadOnlyChoreSection title="Due today" chores={today.due} emptyText="All scheduled chores are current." />
+
+      <section className="panel attention-panel">
+        <h2>Needs attention</h2>
+        <div className="attention-list">
+          {attentionChores.length === 0 && <p className="empty-state">Nothing needs attention right now.</p>}
+          {attentionChores.map((chore) => (
+            <article key={choreKey(chore)} className={`attention-item${chore.is_overdue ? ' urgent' : ''}`}>
+              <span className="avatar-line">
+                <AvatarIcon avatarId={choreAvatarId(chore)} name={choreAvatarName(chore)} size="small" />
+                <strong>{chore.name}</strong>
+              </span>
+              <span>
+                {chore.is_overdue ? 'Overdue' : 'Due today'} • {frequencyLabel(chore.frequency_type)}
+                {chore.responsible_member_name ? ` • ${chore.responsible_member_name}` : ' • household'}
+              </span>
+              {chore.last_completed_at && (
+                <small>Last completed by {chore.last_completed_by ?? 'someone'} {relativeDate(chore.last_completed_at)}</small>
+              )}
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <div className="dashboard-grid">
         <section className="panel">
-          <h2>Completed today</h2>
-          <strong className="big-number">{today.completedToday.length}</strong>
-          <p className="empty-state">{status.weekly.totalCompleted} completed this week</p>
-        </section>
-        <ActivityFeed history={history} />
-        <section className="panel">
-          <h2>Household notes</h2>
-          <div className="read-list">
-            {notes.length === 0 && <p className="empty-state">No active notes.</p>}
-            {notes.slice(0, 5).map((note) => (
-              <article key={note.id} className="read-item">
-                <strong>{noteTypeLabel(note.note_type)}</strong>
-                <span>{note.text}</span>
+          <h2>Recent activity</h2>
+          <div className="activity-feed">
+            {recentActivity.length === 0 && <p className="empty-state">No recent activity.</p>}
+            {recentActivity.map((completion) => (
+              <article key={completion.id}>
+                <span className="avatar-line">
+                  <AvatarIcon avatarId={completion.member_avatar_id} name={completion.member_name} size="small" />
+                  <strong>{completion.member_name}</strong>
+                </span>
+                <span>completed {completion.chore_name}</span>
+                <small>
+                  {formatTime(completion.completed_at)}
+                  <ActivityDayBadge value={completion.completed_at} />
+                </small>
               </article>
+            ))}
+          </div>
+          <button type="button" className="secondary-action compact-action" onClick={onHistory}>
+            Full history
+          </button>
+        </section>
+
+        <section className="panel">
+          <h2>Today’s helpers</h2>
+          <div className="helper-list">
+            {helpers.map((helper) => (
+              <span key={helper.id} className="helper-row">
+                <span className="avatar-line">
+                  <AvatarIcon avatarId={helper.avatarId} name={helper.name} size="small" />
+                  <strong>{helper.name}</strong>
+                </span>
+                <strong>{helper.count}</strong>
+              </span>
             ))}
           </div>
         </section>
       </div>
-    </section>
-  )
-}
 
-function NotesView({
-  notes,
-  draft,
-  onDraftChange,
-  onSave,
-}: {
-  notes: HouseholdNote[]
-  draft: NoteDraft
-  onDraftChange: (draft: NoteDraft) => void
-  onSave: () => void
-}) {
-  const grouped = notes.reduce<Record<NoteType, HouseholdNote[]>>(
-    (groups, note) => {
-      groups[note.note_type] = [...groups[note.note_type], note]
-      return groups
-    },
-    { note: [], shopping: [], reminder: [] },
-  )
-
-  return (
-    <section className="screen">
-      <div className="screen-heading">
-        <p className="eyebrow">Household notes</p>
-        <h1>Quick reminders</h1>
-      </div>
-
-      <section className="panel">
-        <h2>Add quick note</h2>
-        <label>
-          Type
-          <select
-            value={draft.note_type}
-            onChange={(event) => onDraftChange({ ...draft, note_type: event.target.value as NoteType })}
-          >
-            <option value="note">Note</option>
-            <option value="shopping">Shopping</option>
-            <option value="reminder">Reminder</option>
-          </select>
-        </label>
-        <label>
-          Text
-          <textarea
-            placeholder="Need milk, trash pickup tomorrow, dog medicine tonight"
-            value={draft.text}
-            onChange={(event) => onDraftChange({ ...draft, text: event.target.value })}
-          />
-        </label>
-        <button type="button" className="primary-action" onClick={onSave}>
-          Add note
+      <section className="panel bug-teaser">
+        <div>
+          <h2>Bug Box</h2>
+          <p className="empty-state">
+            {selectedMember
+              ? `${selectedMemberName} has ${memberBugs.length} bug${memberBugs.length === 1 ? '' : 's'} hanging out.`
+              : 'Complete chores to catch temporary bugs.'}
+          </p>
+        </div>
+        <div className="bug-teaser-strip">
+          {memberBugs.slice(0, 5).map((bug) => (
+            <BugIcon key={bug.id} bugId={bug.bug_id} size="small" />
+          ))}
+          {memberBugs.length === 0 && bugDefinitions.slice(0, 3).map((bug) => <BugIcon key={bug.id} bugId={bug.id} size="small" />)}
+        </div>
+        <button type="button" className="secondary-action compact-action" onClick={onBugBox}>
+          Open Bug Box
         </button>
       </section>
 
-      {(['reminder', 'shopping', 'note'] as NoteType[]).map((type) => (
-        <section key={type} className="panel">
-          <h2>{noteTypeLabel(type)}</h2>
-          <div className="read-list">
-            {grouped[type].length === 0 && <p className="empty-state">Nothing here.</p>}
-            {grouped[type].map((note) => (
-              <article key={note.id} className="read-item">
-                <strong>{note.text}</strong>
-                <span>Updated {relativeDate(note.updated_at)}</span>
+      {selectedMember && (
+        <section className="panel">
+          <h2>Your chores</h2>
+          <div className="your-chore-list">
+            {selectedMemberOpen.length === 0 && selectedMemberDone.length === 0 && (
+              <p className="empty-state">{selectedMemberName} has no chores showing right now.</p>
+            )}
+            {selectedMemberOpen.map((chore) => (
+              <article key={choreKey(chore)} className="your-chore-row attention">
+                <strong>{chore.is_overdue ? '!' : '•'} {chore.name}</strong>
+                <span>{chore.is_overdue ? 'Overdue' : 'Still due'} • {frequencyLabel(chore.frequency_type)}</span>
+              </article>
+            ))}
+            {selectedMemberDone.map((chore) => (
+              <article key={choreKey(chore)} className="your-chore-row done">
+                <strong>✓ {chore.name}</strong>
+                <span>Done today</span>
               </article>
             ))}
           </div>
         </section>
-      ))}
-    </section>
-  )
-}
-
-function TodayView({
-  today,
-  chores,
-  status,
-  history,
-  selectedMemberName,
-  notificationsEnabled,
-  onEnableNotifications,
-  onQuickComplete,
-  onStart,
-}: {
-  today: TodayState
-  chores: Chore[]
-  status: HouseholdStatus
-  history: Completion[]
-  selectedMemberName: string | null
-  notificationsEnabled: boolean
-  onEnableNotifications: () => void
-  onQuickComplete: (choreNames: string[]) => void
-  onStart: () => void
-}) {
-  const indicators = routineIndicators(today, status)
-
-  return (
-    <section className="screen">
-      <div className="screen-heading">
-        <p className="eyebrow">Today</p>
-        <h1>Household view</h1>
-      </div>
-
-      <div className="today-summary">
-        <div>
-          <strong>{today.due.length}</strong>
-          <span>due</span>
-        </div>
-        <div>
-          <strong>{today.overdue.length}</strong>
-          <span>overdue</span>
-        </div>
-        <div>
-          <strong>{today.completedToday.length}</strong>
-          <span>done today</span>
-        </div>
-      </div>
-
-      <button type="button" className="primary-action" onClick={onStart}>
-        Record a chore
-      </button>
+      )}
 
       <section className="panel">
         <h2>Household rhythm</h2>
         <div className="rhythm-list">
-          {indicators.map((indicator) => (
-            <p key={indicator}>{indicator}</p>
-          ))}
+          <p>{rhythmMessage}</p>
         </div>
       </section>
-
-      <section className="panel status-panel">
-        <h2>This week</h2>
-        <div className="status-grid">
-          <div>
-            <strong>{status.weekly.totalCompleted}</strong>
-            <span>chores completed</span>
-          </div>
-          <div>
-            <strong>{status.weekly.mostActive?.member_name ?? 'None yet'}</strong>
-            <span>most active helper</span>
-          </div>
-        </div>
-        <div className="suggestion-list">
-          {status.suggestions.length === 0 && <p className="empty-state">No reminder suggestions right now.</p>}
-          {status.suggestions.map((suggestion) => (
-            <p key={suggestion.chore_id}>{suggestion.message}</p>
-          ))}
-        </div>
-        <button type="button" className="secondary-action" onClick={onEnableNotifications}>
-          {notificationsEnabled ? 'Browser reminders enabled' : 'Enable browser reminders'}
-        </button>
-      </section>
-
-      <QuickActions
-        selectedMemberName={selectedMemberName}
-        onQuickComplete={onQuickComplete}
-      />
-
-      <div className="chores-layout">
-        <ReadOnlyChoreSection title="Overdue" chores={sortChoresForHousehold(today.overdue)} emptyText="Nothing overdue." />
-        <ReadOnlyChoreSection title="Due today" chores={sortChoresForHousehold(today.due)} emptyText="No due chores right now." />
-      </div>
 
       <section className="panel">
-        <h2>Completed today</h2>
-        <div className="history-list">
-          {today.completedToday.length === 0 && <p className="empty-state">Nothing completed today yet.</p>}
-          {today.completedToday.map((completion) => (
-            <HistoryItem key={completion.id} completion={completion} />
+        <h2>Household notes</h2>
+        <div className="read-list compact-list">
+          {notes.length === 0 && <p className="empty-state">No active notes.</p>}
+          {notes.slice(0, 3).map((note) => (
+            <article key={note.id} className="read-item">
+              <strong>{noteTypeLabel(note.note_type)}</strong>
+              <span>{note.text}</span>
+            </article>
           ))}
         </div>
       </section>
-
-      <ActivityFeed history={history} />
-
-      <ReadOnlyChoreSection title="All active chores" chores={sortChoresForHousehold(chores)} emptyText="No active chores." />
-    </section>
-  )
-}
-
-function QuickActions({
-  selectedMemberName,
-  onQuickComplete,
-}: {
-  selectedMemberName: string | null
-  onQuickComplete: (choreNames: string[]) => void
-}) {
-  return (
-    <section className="panel">
-      <h2>Quick actions</h2>
-      <p className="empty-state">
-        {selectedMemberName ? `Completes as ${selectedMemberName}.` : 'Choose a member device before quick actions.'}
-      </p>
-      <div className="quick-action-grid">
-        <button type="button" onClick={() => onQuickComplete(['Feed Pets'])}>
-          Pets fed
-        </button>
-        <button type="button" onClick={() => onQuickComplete(['Wash Dishes', 'Wipe Kitchen Counters'])}>
-          Kitchen reset
-        </button>
-        <button type="button" onClick={() => onQuickComplete(['Take Out Trash'])}>
-          Trash to curb
-        </button>
-      </div>
-    </section>
-  )
-}
-
-function ActivityFeed({ history }: { history: Completion[] }) {
-  return (
-    <section className="panel">
-      <h2>Activity</h2>
-      <div className="activity-feed">
-        {history.length === 0 && <p className="empty-state">No recent activity.</p>}
-        {history.slice(0, 6).map((completion) => (
-          <article key={completion.id}>
-            <strong>{completion.member_name}</strong>
-            <span> completed {completion.chore_name}</span>
-            <small>{formatTime(completion.completed_at)}</small>
-          </article>
-        ))}
-      </div>
     </section>
   )
 }
@@ -1103,6 +1359,7 @@ function ChorePicker({
   otherChores,
   pendingChore,
   memberName,
+  memberAvatarId,
   onPick,
   onCancel,
   onConfirm,
@@ -1114,6 +1371,7 @@ function ChorePicker({
   otherChores: Chore[]
   pendingChore: Chore | null
   memberName: string
+  memberAvatarId: string | null
   onPick: (chore: Chore) => void
   onCancel: () => void
   onConfirm: (chore: Chore) => void
@@ -1124,7 +1382,10 @@ function ChorePicker({
   if (pendingChore) {
     return (
       <section className="confirm-panel">
-        <p>{memberName}</p>
+        <p className="avatar-line">
+          <AvatarIcon avatarId={memberAvatarId} name={memberName} size="small" />
+          <span>{memberName}</span>
+        </p>
         <h2>{pendingChore.name}</h2>
         <span>{frequencyLabel(pendingChore.frequency_type)}</span>
         <label>
@@ -1160,37 +1421,6 @@ function ChorePicker({
   )
 }
 
-function KioskStatus({
-  today,
-  status,
-  currentTime,
-}: {
-  today: TodayState
-  status: HouseholdStatus
-  currentTime: Date
-}) {
-  return (
-    <section className="kiosk-status">
-      <div>
-        <strong>{formatClock(currentTime)}</strong>
-        <span>{today.completedToday.length} done today</span>
-      </div>
-      <div>
-        <strong>{today.due.length}</strong>
-        <span>due</span>
-      </div>
-      <div>
-        <strong>{today.overdue.length}</strong>
-        <span>overdue</span>
-      </div>
-      <div>
-        <strong>{status.weekly.totalCompleted}</strong>
-        <span>this week</span>
-      </div>
-    </section>
-  )
-}
-
 function ChoreSection({
   title,
   chores,
@@ -1207,7 +1437,10 @@ function ChoreSection({
         {chores.length === 0 && <p className="empty-state">Nothing here right now.</p>}
         {chores.map((chore) => (
           <button key={choreKey(chore)} type="button" className="chore-button" onClick={() => onPick(chore)}>
-            <span>{chore.name}</span>
+            <span className="avatar-line">
+              <AvatarIcon avatarId={choreAvatarId(chore)} name={choreAvatarName(chore)} size="small" />
+              <span>{chore.name}</span>
+            </span>
             <small>{choreMeta(chore)}</small>
           </button>
         ))}
@@ -1216,33 +1449,26 @@ function ChoreSection({
   )
 }
 
-function ReadOnlyChoreSection({
-  title,
+function HistoryView({
+  history,
+  members,
   chores,
-  emptyText,
 }: {
-  title: string
+  history: Completion[]
+  members: Member[]
   chores: Chore[]
-  emptyText: string
 }) {
-  return (
-    <section className="panel">
-      <h2>{title}</h2>
-      <div className="read-list">
-        {chores.length === 0 && <p className="empty-state">{emptyText}</p>}
-        {chores.map((chore) => (
-          <article key={choreKey(chore)} className="read-item">
-            <strong>{chore.name}</strong>
-            <span>{choreMeta(chore)}</span>
-          </article>
-        ))}
-      </div>
-    </section>
-  )
-}
-
-function HistoryView({ history }: { history: Completion[] }) {
-  const grouped = history.reduce<Record<string, Completion[]>>((groups, completion) => {
+  const [range, setRange] = useState<HistoryRange>('7d')
+  const [memberFilter, setMemberFilter] = useState('all')
+  const [choreFilter, setChoreFilter] = useState('all')
+  const memberOptions = members.map((member) => displayFamilyMemberPublic(member))
+  const choreOptions = [...new Set(chores.map((chore) => chore.name).concat(history.map((completion) => completion.chore_name)))].sort()
+  const filteredHistory = filterCompletions(history, range, memberFilter, choreFilter)
+  const memberCounts = getCompletionCountsByMember(filteredHistory, members)
+  const choreCounts = getCompletionCountsByChore(filteredHistory)
+  const mostActive = memberCounts.find((member) => member.count > 0)
+  const mostRepeated = choreCounts[0]
+  const grouped = filteredHistory.reduce<Record<string, Completion[]>>((groups, completion) => {
     const key = new Date(`${completion.completed_at}Z`).toDateString()
     groups[key] = [...(groups[key] ?? []), completion]
     return groups
@@ -1252,10 +1478,87 @@ function HistoryView({ history }: { history: Completion[] }) {
     <section className="screen">
       <div className="screen-heading">
         <p className="eyebrow">History</p>
-        <h1>What happened lately</h1>
+        <h1>Activity and trends</h1>
       </div>
 
-      {history.length === 0 && <p className="empty-state">No chores have been completed yet.</p>}
+      <section className="panel history-filters">
+        <div className="segmented-control" aria-label="Time range">
+          {([
+            ['today', 'Today'],
+            ['7d', '7 days'],
+            ['30d', '30 days'],
+          ] as Array<[HistoryRange, string]>).map(([value, label]) => (
+            <button key={value} type="button" className={range === value ? 'selected' : ''} onClick={() => setRange(value)}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <label>
+          Member
+          <select value={memberFilter} onChange={(event) => setMemberFilter(event.target.value)}>
+            <option value="all">All</option>
+            {memberOptions.map((name) => (
+              <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Chore
+          <select value={choreFilter} onChange={(event) => setChoreFilter(event.target.value)}>
+            <option value="all">All</option>
+            {choreOptions.map((name) => (
+              <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
+        </label>
+      </section>
+
+      <div className="summary-grid">
+        <section className="panel metric-card">
+          <span>Total completed</span>
+          <strong>{filteredHistory.length}</strong>
+        </section>
+        <section className="panel metric-card">
+          <span>Most active helper</span>
+          <strong>{mostActive ? mostActive.name : 'None yet'}</strong>
+        </section>
+        <section className="panel metric-card">
+          <span>Most repeated chore</span>
+          <strong>{mostRepeated ? mostRepeated.name : 'None yet'}</strong>
+        </section>
+      </div>
+
+      <div className="dashboard-grid">
+        <section className="panel">
+          <h2>Contribution breakdown</h2>
+          <div className="helper-list">
+            {memberCounts.map((member) => (
+              <span key={member.id} className="helper-row">
+                <span className="avatar-line">
+                  <AvatarIcon avatarId={member.avatarId} name={member.name} size="small" />
+                  <strong>{member.name}</strong>
+                </span>
+                <strong>{member.count}</strong>
+              </span>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel">
+          <h2>Most completed chores</h2>
+          <div className="helper-list">
+            {choreCounts.length === 0 && <p className="empty-state">No chores in this range.</p>}
+            {choreCounts.slice(0, 8).map((chore) => (
+              <span key={chore.name} className="helper-row">
+                <strong>{chore.name}</strong>
+                <strong>{chore.count}</strong>
+              </span>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      {filteredHistory.length === 0 && <p className="empty-state">No chores match these filters.</p>}
       {Object.entries(grouped).map(([day, completions]) => (
         <section key={day} className="panel">
           <h2>{dayLabel(day)}</h2>
@@ -1270,14 +1573,112 @@ function HistoryView({ history }: { history: Completion[] }) {
   )
 }
 
+function BugBoxView({
+  members,
+  selectedMember,
+  selectedMemberId,
+  canSwitchMembers,
+  bugs,
+  onSelectMember,
+  onExplodeBug,
+}: {
+  members: Member[]
+  selectedMember: Member | null
+  selectedMemberId: number | null
+  canSwitchMembers: boolean
+  bugs: EarnedBug[]
+  onSelectMember: (memberId: number | null) => void
+  onExplodeBug: (earnedBugId: string) => Promise<void> | void
+}) {
+  const visibleBugs = useMemo(() => bugs.slice(0, 30), [bugs])
+  const memberName = selectedMember ? displayFamilyMemberPublic(selectedMember) : null
+  const bugViewModels: ActiveBugViewModel[] = useMemo(
+    () =>
+      visibleBugs.map((bug) => {
+        const definition = getBugDefinition(bug.bug_id)
+        return {
+          earnedBugId: String(bug.id),
+          bugId: bug.bug_id,
+          displayName: definition.displayName,
+          file: definition.file,
+          earnedAt: bug.earned_at,
+          expiresAt: bug.expires_at,
+        }
+      }),
+    [visibleBugs],
+  )
+
+  return (
+    <section className="screen bug-box-screen">
+      <div className="screen-heading">
+        <h1>{memberName ? `${memberName}’s Bug Box` : 'Whose Bug Box?'}</h1>
+      </div>
+
+      {canSwitchMembers && !selectedMemberId && (
+        <div className="button-grid">
+          {members.filter((member) => member.active === 1).map((member) => (
+            <button key={member.id} type="button" className="member-choice" onClick={() => onSelectMember(member.id)}>
+              <AvatarIcon avatarId={member.avatar_id} name={displayFamilyMemberPublic(member)} size="medium" />
+              <span>{displayFamilyMemberPublic(member)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {selectedMemberId && (
+        <>
+          {bugs.length > 30 && <p className="empty-state">Showing newest 30 bugs in physics mode.</p>}
+
+          <BugPhysicsBox bugs={bugViewModels} onExplodeBug={onExplodeBug} />
+
+          <div className="bug-box-toolbar">
+            <div className="bug-box-details">
+              <p className="empty-state">Bugs stay for 3 days after each chore.</p>
+              <strong>{bugs.length} bug{bugs.length === 1 ? '' : 's'} hanging out</strong>
+            </div>
+            {canSwitchMembers && (
+              <button type="button" className="secondary-action compact-action" onClick={() => onSelectMember(null)}>
+                Back to bug boxes
+              </button>
+            )}
+          </div>
+
+          {bugs.length > 0 && (
+            <div className="bug-summary-list" aria-label="Active bug list">
+              {visibleBugs.map((bug) => {
+                const definition = getBugDefinition(bug.bug_id)
+                return (
+                  <span key={bug.id}>
+                    {definition.displayName} · {bugTimeLeft(bug.expires_at)}
+                  </span>
+                )
+              })}
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
 function HistoryItem({ completion }: { completion: Completion }) {
   return (
     <article className="history-item">
       <div>
-        <strong>{completion.member_name}</strong>
+        <span className="avatar-line">
+          <AvatarIcon avatarId={completion.member_avatar_id} name={completion.member_name} size="small" />
+          <strong>{completion.member_name}</strong>
+        </span>
         <span>{completion.chore_name}</span>
         {completion.responsible_member_name && completion.responsible_member_name !== completion.member_name && (
-          <small>For {completion.responsible_member_name}</small>
+          <small className="avatar-line">
+            <AvatarIcon
+              avatarId={completion.responsible_member_avatar_id}
+              name={completion.responsible_member_name}
+              size="small"
+            />
+            <span>For {completion.responsible_member_name}</span>
+          </small>
         )}
       </div>
       <div className="history-meta">
@@ -1297,17 +1698,20 @@ function AdminView({
   memberDraft,
   choreDraft,
   noteDraft,
+  aquariumConfigDraft,
   notes,
   onPinChange,
   onUnlock,
   onMemberDraftChange,
   onChoreDraftChange,
   onNoteDraftChange,
+  onAquariumConfigDraftChange,
   onSaveMember,
   onDeleteMember,
   onSaveChore,
   onDeleteChore,
   onSaveNote,
+  onSaveAquariumConfig,
   onExport,
 }: {
   pin: string
@@ -1317,20 +1721,23 @@ function AdminView({
   memberDraft: MemberDraft
   choreDraft: ChoreDraft
   noteDraft: NoteDraft
+  aquariumConfigDraft: AquariumConfigDraft
   notes: HouseholdNote[]
   onPinChange: (pin: string) => void
   onUnlock: () => void
   onMemberDraftChange: (draft: MemberDraft) => void
   onChoreDraftChange: (draft: ChoreDraft) => void
   onNoteDraftChange: (draft: NoteDraft) => void
+  onAquariumConfigDraftChange: (draft: AquariumConfigDraft) => void
   onSaveMember: () => void
   onDeleteMember: (member: Member) => void
   onSaveChore: () => void
   onDeleteChore: (chore: Chore) => void
   onSaveNote: () => void
+  onSaveAquariumConfig: () => void
   onExport: () => void
 }) {
-  const [section, setSection] = useState<'menu' | 'members' | 'chores' | 'notes' | 'backup'>('menu')
+  const [section, setSection] = useState<'menu' | 'members' | 'chores' | 'notes' | 'aquarium' | 'backup'>('menu')
   const activeMembers = members.filter((member) => member.active === 1)
 
   function updateChoreAssignmentMode(assignment_mode: AssignmentMode) {
@@ -1404,6 +1811,10 @@ function AdminView({
             <strong>Notes</strong>
             <span>Manage shared notes, reminders, and shopping items.</span>
           </button>
+          <button type="button" onClick={() => setSection('aquarium')}>
+            <strong>Aquarium</strong>
+            <span>Tune food, eggs, milestones, and growth timing.</span>
+          </button>
         </div>
       </section>
     )
@@ -1424,12 +1835,23 @@ function AdminView({
           <section className="panel setup-form-panel">
             <h2>{memberDraft.id ? 'Edit family member' : 'Add family member'}</h2>
             <label>
-              Display name
+              Real name
               <input
                 value={memberDraft.display_name}
                 onChange={(event) => onMemberDraftChange({ ...memberDraft, display_name: event.target.value })}
               />
             </label>
+            <label>
+              Nickname
+              <input
+                value={memberDraft.nickname}
+                onChange={(event) => onMemberDraftChange({ ...memberDraft, nickname: event.target.value })}
+              />
+            </label>
+            <AvatarPicker
+              value={memberDraft.avatar_id || defaultAvatarId}
+              onChange={(avatarId) => onMemberDraftChange({ ...memberDraft, avatar_id: avatarId })}
+            />
             <label>
               Type
               <select
@@ -1470,7 +1892,7 @@ function AdminView({
             <h2>Family members</h2>
             <div className="member-grid">
               <div className="member-grid-header" aria-hidden="true">
-                <span>Display</span>
+                <span>Name</span>
                 <span>Type</span>
                 <span>Sort order</span>
                 <span>Active</span>
@@ -1478,12 +1900,24 @@ function AdminView({
               </div>
               {members.map((member) => (
                 <article key={member.id} className="member-grid-row">
-                  <strong>{member.display_name}</strong>
+                  <span className="avatar-line">
+                    <AvatarIcon avatarId={member.avatar_id} name={displayFamilyMemberForSetup(member)} size="small" />
+                    <strong>{displayFamilyMemberForSetup(member)}</strong>
+                  </span>
                   <span>{member.member_type}</span>
                   <span>{member.sort_order}</span>
                   <span>{member.active ? 'Yes' : 'No'}</span>
                   <div className="member-grid-actions">
-                    <button type="button" onClick={() => onMemberDraftChange({ ...member })}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onMemberDraftChange({
+                          ...member,
+                          nickname: member.nickname ?? '',
+                          avatar_id: member.avatar_id ?? defaultAvatarId,
+                        })
+                      }
+                    >
                       Edit
                     </button>
                     {member.active === 1 && (
@@ -1524,6 +1958,8 @@ function AdminView({
                 onChange={(event) => onChoreDraftChange({ ...choreDraft, frequency_type: event.target.value as FrequencyType })}
               >
                 <option value="daily">Daily</option>
+                <option value="weekdays">Weekdays (M-F)</option>
+                <option value="weekends">Weekends (Sa-Su)</option>
                 <option value="weekly">Weekly</option>
                 <option value="monthly">Monthly</option>
                 <option value="as_needed">As needed</option>
@@ -1557,7 +1993,7 @@ function AdminView({
                   <option value="">Choose a person</option>
                   {activeMembers.map((member) => (
                     <option key={member.id} value={member.id}>
-                      {member.display_name}
+                      {displayFamilyMemberForSetup(member)}
                     </option>
                   ))}
                 </select>
@@ -1573,7 +2009,7 @@ function AdminView({
                       checked={choreDraft.assignment_member_ids.includes(member.id)}
                       onChange={(event) => updateChoreAssignmentMember(member.id, event.target.checked)}
                     />
-                    {member.display_name}
+                    {displayFamilyMemberForSetup(member)}
                   </label>
                 ))}
               </fieldset>
@@ -1596,6 +2032,14 @@ function AdminView({
                 onChange={(event) => onChoreDraftChange({ ...choreDraft, needs_reminder: event.target.checked ? 1 : 0 })}
               />
               Needs reminder
+            </label>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={choreDraft.feeds_aquarium === 1}
+                onChange={(event) => onChoreDraftChange({ ...choreDraft, feeds_aquarium: event.target.checked ? 1 : 0 })}
+              />
+              Feeds fish
             </label>
             <label className="check-row">
               <input
@@ -1625,6 +2069,7 @@ function AdminView({
                 <span>Assignment</span>
                 <span>Overdue</span>
                 <span>Reminder</span>
+                <span>Feeds fish</span>
                 <span>Active</span>
                 <span>Actions</span>
               </div>
@@ -1633,9 +2078,10 @@ function AdminView({
                   <strong>{chore.name}</strong>
                   <span>{chore.description || 'None'}</span>
                   <span>{frequencyLabel(chore.frequency_type)}</span>
-                  <span>{assignmentLabel(chore)}</span>
+                  <span>{assignmentLabel(chore, members)}</span>
                   <span>{chore.alert_if_overdue ? 'Yes' : 'No'}</span>
                   <span>{chore.needs_reminder ? 'Yes' : 'No'}</span>
+                  <span>{chore.feeds_aquarium ? 'Yes' : 'No'}</span>
                   <span>{chore.active ? 'Yes' : 'No'}</span>
                   <div className="chore-grid-actions">
                     <button
@@ -1651,6 +2097,7 @@ function AdminView({
                           assigned_member_id: parseAssignmentMemberIds(chore)[0] ?? '',
                           alert_if_overdue: chore.alert_if_overdue,
                           needs_reminder: chore.needs_reminder,
+                          feeds_aquarium: chore.feeds_aquarium ?? 1,
                           active: chore.active,
                         })
                       }
@@ -1737,8 +2184,184 @@ function AdminView({
       </section>
         </>
       )}
+
+      {section === 'aquarium' && (
+        <section className="panel setup-form-panel">
+          <h2>Aquarium tuning</h2>
+          <div className="setup-number-grid">
+            <label>
+              Current food reserve
+              <input
+                type="number"
+                min={0}
+                value={aquariumConfigDraft.food_reserve}
+                onChange={(event) =>
+                  onAquariumConfigDraftChange({ ...aquariumConfigDraft, food_reserve: Number(event.target.value) })
+                }
+              />
+            </label>
+            <label>
+              Starting food reserve
+              <input
+                type="number"
+                min={0}
+                value={aquariumConfigDraft.starting_food_reserve}
+                onChange={(event) =>
+                  onAquariumConfigDraftChange({ ...aquariumConfigDraft, starting_food_reserve: Number(event.target.value) })
+                }
+              />
+            </label>
+            <label>
+              Maximum food reserve
+              <input
+                type="number"
+                min={1}
+                value={aquariumConfigDraft.max_food_reserve}
+                onChange={(event) =>
+                  onAquariumConfigDraftChange({ ...aquariumConfigDraft, max_food_reserve: Number(event.target.value) })
+                }
+              />
+            </label>
+            <label>
+              Food consumed per day
+              <input
+                type="number"
+                min={0}
+                value={aquariumConfigDraft.daily_food_consumption}
+                onChange={(event) =>
+                  onAquariumConfigDraftChange({ ...aquariumConfigDraft, daily_food_consumption: Number(event.target.value) })
+                }
+              />
+            </label>
+            <label>
+              Chores required for egg
+              <input
+                type="number"
+                min={1}
+                value={aquariumConfigDraft.creature_unlock_interval}
+                onChange={(event) =>
+                  onAquariumConfigDraftChange({ ...aquariumConfigDraft, creature_unlock_interval: Number(event.target.value) })
+                }
+              />
+            </label>
+            <label>
+              Egg incubation minutes
+              <input
+                type="number"
+                min={0}
+                value={aquariumConfigDraft.egg_incubation_minutes}
+                onChange={(event) =>
+                  onAquariumConfigDraftChange({ ...aquariumConfigDraft, egg_incubation_minutes: Number(event.target.value) })
+                }
+              />
+            </label>
+            <label>
+              Baby growth days
+              <input
+                type="number"
+                min={0}
+                value={aquariumConfigDraft.growth_days}
+                onChange={(event) =>
+                  onAquariumConfigDraftChange({ ...aquariumConfigDraft, growth_days: Number(event.target.value) })
+                }
+              />
+            </label>
+          </div>
+          <button type="button" className="primary-action" onClick={onSaveAquariumConfig}>
+            Save aquarium tuning
+          </button>
+        </section>
+      )}
     </section>
   )
+}
+
+function getNeedsAttention(today: TodayState) {
+  return sortChoresForHousehold([...today.overdue, ...today.due])
+}
+
+function getRecentActivity(history: Completion[], limit: number) {
+  return [...history]
+    .sort((left, right) => new Date(`${right.completed_at}Z`).getTime() - new Date(`${left.completed_at}Z`).getTime())
+    .slice(0, limit)
+}
+
+function getTodayContributions(members: Member[], completedToday: Completion[]) {
+  const counts = completedToday.reduce<Record<string, number>>((totals, completion) => {
+    totals[completion.member_name] = (totals[completion.member_name] ?? 0) + 1
+    return totals
+  }, {})
+
+  return members
+    .filter((member) => member.active === 1)
+    .map((member) => ({
+      id: member.id,
+      name: displayFamilyMemberPublic(member),
+      avatarId: member.avatar_id,
+      count: counts[displayFamilyMemberPublic(member)] ?? 0,
+    }))
+    .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name))
+}
+
+function getHouseholdRhythmMessage(today: TodayState) {
+  if (today.overdue.length > 0) {
+    return `${today.overdue.length} chore${today.overdue.length === 1 ? '' : 's'} need attention.`
+  }
+
+  if (today.completedToday.length >= 10) return 'Great teamwork today.'
+  if (today.completedToday.length > 0) return 'Chores are getting done.'
+  return 'No chores completed yet today.'
+}
+
+function filterCompletions(history: Completion[], range: HistoryRange, memberName: string, choreName: string) {
+  return history
+    .filter((completion) => isCompletionInRange(completion, range))
+    .filter((completion) => memberName === 'all' || completion.member_name === memberName)
+    .filter((completion) => choreName === 'all' || completion.chore_name === choreName)
+    .sort((left, right) => new Date(`${right.completed_at}Z`).getTime() - new Date(`${left.completed_at}Z`).getTime())
+}
+
+function isCompletionInRange(completion: Completion, range: HistoryRange) {
+  const completedAt = new Date(`${completion.completed_at}Z`)
+  const now = new Date()
+
+  if (range === 'today') {
+    return completedAt.toDateString() === now.toDateString()
+  }
+
+  const days = range === '7d' ? 7 : 30
+  const start = new Date(now)
+  start.setDate(now.getDate() - (days - 1))
+  start.setHours(0, 0, 0, 0)
+  return completedAt >= start
+}
+
+function getCompletionCountsByMember(history: Completion[], members: Member[]) {
+  const counts = history.reduce<Record<string, number>>((totals, completion) => {
+    totals[completion.member_name] = (totals[completion.member_name] ?? 0) + 1
+    return totals
+  }, {})
+
+  return members
+    .filter((member) => member.active === 1)
+    .map((member) => ({
+      id: member.id,
+      name: displayFamilyMemberPublic(member),
+      avatarId: member.avatar_id,
+      count: counts[displayFamilyMemberPublic(member)] ?? 0,
+    }))
+    .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name))
+}
+
+function getCompletionCountsByChore(history: Completion[]) {
+  const counts = history.reduce<Record<string, number>>((totals, completion) => {
+    totals[completion.chore_name] = (totals[completion.chore_name] ?? 0) + 1
+    return totals
+  }, {})
+
+  return Object.entries(counts)
+    .map(([name, count]) => ({ name, count }))
+    .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name))
 }
 
 function choreMeta(chore: Chore) {
@@ -1757,6 +2380,14 @@ function choreMeta(chore: Chore) {
   return `${frequencyLabel(chore.frequency_type)} · ${status}${assigned}${lastDone}`
 }
 
+function choreAvatarId(chore: Chore) {
+  return chore.responsible_member_avatar_id ?? chore.assigned_member_avatar_id ?? chore.last_completed_by_avatar_id ?? null
+}
+
+function choreAvatarName(chore: Chore) {
+  return chore.responsible_member_name ?? chore.assigned_member_name ?? chore.last_completed_by ?? 'Household'
+}
+
 function choreKey(chore: Chore) {
   return `${chore.id}-${chore.responsible_member_id ?? 'household'}`
 }
@@ -1772,38 +2403,17 @@ function parseAssignmentMemberIds(chore: Chore) {
   return chore.assigned_member_id ? [chore.assigned_member_id] : []
 }
 
-function assignmentLabel(chore: Chore) {
+function assignmentLabel(chore: Chore, members: Member[]) {
+  const assignedMembers = parseAssignmentMemberIds(chore)
+    .map((id) => members.find((member) => member.id === id))
+    .filter((member): member is Member => Boolean(member))
+    .map(displayFamilyMemberForSetup)
+
   if (chore.assignment_mode === 'household_anyone') return 'Anyone once'
   if (chore.assignment_mode === 'assigned_individual') {
-    return chore.assignment_member_names || chore.assigned_member_name || 'One person'
+    return assignedMembers[0] || chore.assigned_member_name || 'One person'
   }
-  return chore.assignment_member_names || 'Selected people'
-}
-
-function routineIndicators(today: TodayState, status: HouseholdStatus) {
-  const indicators: string[] = []
-
-  if (today.overdue.length === 0 && today.due.length === 0) {
-    indicators.push('All scheduled chores are current.')
-  } else if (today.overdue.length === 0) {
-    indicators.push('No overdue chores right now.')
-  } else {
-    indicators.push(`${today.overdue.length} chore${today.overdue.length === 1 ? '' : 's'} need attention.`)
-  }
-
-  if (today.completedToday.length >= 5) {
-    indicators.push('Great teamwork today.')
-  } else if (today.completedToday.length > 0) {
-    indicators.push(`${today.completedToday.length} chore${today.completedToday.length === 1 ? '' : 's'} completed today.`)
-  } else {
-    indicators.push('A fresh household day is ready to start.')
-  }
-
-  if (status.weekly.totalCompleted >= 10) {
-    indicators.push('Weekly cleanup is moving well.')
-  }
-
-  return indicators
+  return assignedMembers.length > 0 ? assignedMembers.join(', ') : chore.assignment_member_names || 'Selected people'
 }
 
 function sortChoresForHousehold(items: Chore[]) {
@@ -1822,15 +2432,30 @@ function chorePriority(chore: Chore) {
 
 function frequencyLabel(frequency: FrequencyType) {
   if (frequency === 'as_needed') return 'As needed'
+  if (frequency === 'weekdays') return 'Weekdays'
+  if (frequency === 'weekends') return 'Weekends'
   return frequency[0].toUpperCase() + frequency.slice(1)
 }
 
-function setupSectionTitle(section: 'menu' | 'members' | 'chores' | 'notes' | 'backup') {
+function setupSectionTitle(section: 'menu' | 'members' | 'chores' | 'notes' | 'aquarium' | 'backup') {
   if (section === 'members') return 'Manage family members'
   if (section === 'chores') return 'Manage chores'
   if (section === 'notes') return 'Manage notes'
+  if (section === 'aquarium') return 'Tune aquarium'
   if (section === 'backup') return 'Backup'
   return 'What do you want to manage?'
+}
+
+function toAquariumConfigDraft(config: AquariumConfigDraft): AquariumConfigDraft {
+  return {
+    food_reserve: Number(config.food_reserve ?? defaultAquariumConfigDraft.food_reserve),
+    starting_food_reserve: Number(config.starting_food_reserve ?? defaultAquariumConfigDraft.starting_food_reserve),
+    max_food_reserve: Number(config.max_food_reserve ?? defaultAquariumConfigDraft.max_food_reserve),
+    daily_food_consumption: Number(config.daily_food_consumption ?? defaultAquariumConfigDraft.daily_food_consumption),
+    creature_unlock_interval: Number(config.creature_unlock_interval ?? defaultAquariumConfigDraft.creature_unlock_interval),
+    egg_incubation_minutes: Number(config.egg_incubation_minutes ?? defaultAquariumConfigDraft.egg_incubation_minutes),
+    growth_days: Number(config.growth_days ?? defaultAquariumConfigDraft.growth_days),
+  }
 }
 
 function noteTypeLabel(type: NoteType) {
@@ -1858,19 +2483,51 @@ function formatTime(value: string) {
   }).format(new Date(`${value}Z`))
 }
 
-function formatClock(value: Date) {
+function activityDayLabel(value: string) {
+  const date = new Date(`${value}Z`)
+  const today = startOfLocalDay(new Date())
+  const activityDay = startOfLocalDay(date)
+  const diffDays = Math.round((today.getTime() - activityDay.getTime()) / 86_400_000)
+
+  if (diffDays === 0) return { label: 'Today', kind: 'today' }
+  if (diffDays === 1) return { label: 'Yesterday', kind: 'yesterday' }
+
+  return {
+    label: new Intl.DateTimeFormat(undefined, { weekday: 'long' }).format(date),
+    kind: 'weekday',
+  }
+}
+
+function startOfLocalDay(value: Date) {
+  const date = new Date(value)
+  date.setHours(0, 0, 0, 0)
+  return date
+}
+
+function formatCompactDateTime(value: Date) {
   return new Intl.DateTimeFormat(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
   }).format(value)
 }
 
-function formatLongDate(value: Date) {
-  return new Intl.DateTimeFormat(undefined, {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-  }).format(value)
+function formatIdleCountdown(valueMs: number) {
+  const totalSeconds = Math.max(0, Math.ceil(valueMs / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${minutes}:${String(seconds).padStart(2, '0')}`
+}
+
+function bugTimeLeft(expiresAt: string) {
+  const remainingMs = new Date(`${expiresAt}Z`).getTime() - Date.now()
+  if (remainingMs <= 0) return 'expires today'
+
+  const remainingDays = Math.ceil(remainingMs / 86_400_000)
+  if (remainingDays <= 1) return 'expires tomorrow'
+  return `${remainingDays} days left`
 }
 
 function relativeDate(value: string) {

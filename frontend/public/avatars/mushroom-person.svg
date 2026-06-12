@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title">
+  <title>Mushroom Person avatar</title>
+  <g fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path fill="#dc2626" d="M14 45c4-20 17-33 34-33s30 13 34 33c-9 11-59 11-68 0Z"/>
+    <path fill="#fff7ed" d="M31 35c0-5 4-9 9-9s9 4 9 9-4 9-9 9-9-4-9-9Z"/>
+    <path fill="#fff7ed" d="M58 30c0-4 3-7 7-7s7 3 7 7-3 7-7 7-7-3-7-7Z"/>
+    <path fill="#fff7ed" d="M35 48c2-7 7-11 13-11s11 4 13 11v25c0 9-5 14-13 14s-13-5-13-14V48Z"/>
+    <path fill="#fde68a" d="M35 70c-8 3-14 2-20-3"/>
+    <path fill="#fde68a" d="M61 70c8 3 14 2 20-3"/>
+  </g>
+  <g class="eyes" fill="#292524">
+    <circle cx="42" cy="62" r="3"/>
+    <circle cx="54" cy="62" r="3"/>
+  </g>
+  <g class="mouth" fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round">
+    <path d="M43 71c3 2 7 2 10 0"/>
+  </g>
+</svg>

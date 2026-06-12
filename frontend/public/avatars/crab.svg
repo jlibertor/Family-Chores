@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title">
+  <title>Crab avatar</title>
+  <g fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path fill="#fb923c" d="M24 57c0-14 10-23 24-23s24 9 24 23-10 24-24 24-24-10-24-24Z"/>
+    <path fill="#f97316" d="M28 39C19 28 9 28 9 39c0 7 8 9 14 4"/>
+    <path fill="#f97316" d="M68 39c7-15 20-15 20-3 0 8-9 11-15 6"/>
+    <path d="M25 66H14"/>
+    <path d="M28 73H17"/>
+    <path d="M71 66h11"/>
+    <path d="M68 73h11"/>
+  </g>
+  <g class="eyes" fill="#fff" stroke="#292524" stroke-width="4">
+    <circle cx="39" cy="48" r="6"/>
+    <circle cx="57" cy="48" r="6"/>
+  </g>
+  <g fill="#292524">
+    <circle cx="40" cy="50" r="2"/>
+    <circle cx="56" cy="50" r="2"/>
+  </g>
+  <g class="mouth" fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round">
+    <path d="M42 62c4 3 8 3 12 0"/>
+  </g>
+</svg>

@@ -24,19 +24,34 @@ Set the parent setup PIN as a Worker secret:
 npx wrangler secret put PARENT_PIN --config worker/wrangler.toml
 ```
 
-## Deploy Worker
+## Current Free Production URLs
+
+- Frontend: <https://family-chores-cta.pages.dev>
+- API: <https://family-chores-api.jlibertor.workers.dev>
+
+## Deploy Everything
+
+After the one-time setup is complete, deploy the Worker and frontend with:
+
+```bash
+npm run deploy:prod
+```
+
+This builds the frontend with `VITE_API_BASE_URL=https://family-chores-api.jlibertor.workers.dev` and deploys Pages as the production branch.
+
+## Deploy Worker Only
 
 ```bash
 npm run deploy:worker
 ```
 
-## Deploy Frontend
+## Deploy Frontend Only
 
 Build and deploy the Vite app to Cloudflare Pages:
 
 ```bash
-npm run build
-npm run deploy:frontend
+VITE_API_BASE_URL=https://family-chores-api.jlibertor.workers.dev npm --workspace frontend run build
+npx wrangler pages deploy frontend/dist --project-name family-chores --branch main --commit-dirty=true
 ```
 
 ## Smoke Check
@@ -44,12 +59,12 @@ npm run deploy:frontend
 After deploying, run the smoke checks against the deployed Worker:
 
 ```bash
-API_BASE_URL=https://your-worker.example.workers.dev PARENT_PIN=your-pin npm run smoke
+API_BASE_URL=https://family-chores-api.jlibertor.workers.dev PARENT_PIN=1234 npm run smoke
 ```
 
 ## Notes
 
-- The frontend uses relative `/api` paths.
+- The frontend uses relative `/api` paths locally.
 - Local Vite dev proxies `/api` to `http://127.0.0.1:8787`.
-- Production should route `/api/*` to the deployed Worker.
-- A custom domain can be added later.
+- Production uses `VITE_API_BASE_URL` to call the free Worker URL directly.
+- No custom domain is required.

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title">
+  <title>Penguin avatar</title>
+  <g fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path fill="#1f2937" d="M23 54c0-22 10-37 25-37s25 15 25 37c0 20-11 33-25 33S23 74 23 54Z"/>
+    <path fill="#f8fafc" d="M33 59c0-16 6-28 15-28s15 12 15 28c0 14-7 23-15 23s-15-9-15-23Z"/>
+    <path fill="#111827" d="M25 56c-9 4-13 11-10 18 8-1 13-6 15-14"/>
+    <path fill="#111827" d="M71 56c9 4 13 11 10 18-8-1-13-6-15-14"/>
+    <path fill="#fb923c" d="M40 74c-5 3-9 5-14 4 4-5 8-7 14-7"/>
+    <path fill="#fb923c" d="M56 74c5 3 9 5 14 4-4-5-8-7-14-7"/>
+    <path fill="#f59e0b" d="m48 52-8 7 8 5 8-5-8-7Z"/>
+  </g>
+  <g class="eyes">
+    <circle cx="39" cy="45" r="7" fill="#f8fafc" stroke="#292524" stroke-width="4"/>
+    <circle cx="57" cy="45" r="7" fill="#f8fafc" stroke="#292524" stroke-width="4"/>
+    <circle cx="41" cy="46" r="3" fill="#292524"/>
+    <circle cx="55" cy="46" r="3" fill="#292524"/>
+  </g>
+</svg>

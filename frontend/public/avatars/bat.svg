@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title">
+  <title>Bat avatar</title>
+  <g fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path fill="#57534e" d="M32 41 21 17l21 12a31 31 0 0 1 12 0l21-12-11 24c5 6 8 13 8 21 0 15-10 24-24 24S24 77 24 62c0-8 3-15 8-21Z"/>
+    <path fill="#78716c" d="M28 60C18 49 9 48 5 60c8-2 14 1 18 9"/>
+    <path fill="#78716c" d="M68 60c10-11 19-12 23 0-8-2-14 1-18 9"/>
+    <path fill="#a8a29e" d="M36 31 27 22l5 16"/>
+    <path fill="#a8a29e" d="M60 31l9-9-5 16"/>
+  </g>
+  <g class="eyes" fill="#292524">
+    <circle cx="40" cy="55" r="4"/>
+    <circle cx="56" cy="55" r="4"/>
+    <circle cx="41" cy="53" r="1.2" fill="#fff"/>
+    <circle cx="57" cy="53" r="1.2" fill="#fff"/>
+  </g>
+  <g class="mouth" fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round">
+    <path d="M43 65c3 3 7 3 10 0"/>
+  </g>
+</svg>

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title">
+  <title>Goldfish avatar</title>
+  <g fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path fill="#fb923c" d="M26 50c-5-12-12-18-21-18 1 12 8 18 18 20-10 3-17 10-18 22 10 0 18-6 22-18 4 12 16 21 31 21 17 0 30-11 30-25S75 27 58 27C42 27 31 36 26 50Z"/>
+    <path fill="#fdba74" d="M58 28c-7-10-15-14-25-13 2 12 11 19 23 20"/>
+    <path fill="#fdba74" d="M60 76c-8 8-17 10-27 7 4-10 13-15 25-15"/>
+    <path fill="#f97316" d="M75 42c6 5 8 15 1 21"/>
+    <path d="M30 50h-8"/>
+  </g>
+  <g class="eyes">
+    <circle cx="61" cy="46" r="6" fill="#fff" stroke="#292524" stroke-width="4"/>
+    <circle cx="63" cy="47" r="2.5" fill="#292524"/>
+  </g>
+  <g class="mouth" fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round">
+    <path d="M72 57c-3 3-7 3-10 0"/>
+  </g>
+  <g fill="#bae6fd" stroke="#292524" stroke-width="3">
+    <circle cx="78" cy="21" r="4"/>
+    <circle cx="88" cy="13" r="3"/>
+  </g>
+</svg>

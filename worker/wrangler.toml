@@ -5,7 +5,7 @@ compatibility_date = "2025-01-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "family-chores"
-database_id = "local-family-chores"
+database_id = "db94d0ac-60c4-4c90-a9cf-b39c40da6b02"
 migrations_dir = "../database/migrations"
 
 # Configure the real parent PIN as a Cloudflare secret:

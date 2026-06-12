@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title">
+  <title>Green Slime avatar</title>
+  <g fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path fill="#86efac" d="M18 65c0-25 13-47 30-47s30 22 30 47c0 15-12 23-30 23s-30-8-30-23Z"/>
+    <path fill="#bbf7d0" opacity=".75" d="M33 35c4-8 11-13 18-12"/>
+    <path fill="#4ade80" opacity=".55" d="M23 66c8 7 41 7 50 0-2 12-12 18-25 18s-23-6-25-18Z"/>
+  </g>
+  <g class="eyes" fill="#292524">
+    <circle cx="38" cy="54" r="4"/>
+    <circle cx="58" cy="54" r="4"/>
+    <circle cx="39" cy="52" r="1.2" fill="#fff"/>
+    <circle cx="59" cy="52" r="1.2" fill="#fff"/>
+  </g>
+  <g class="mouth" fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round">
+    <path d="M40 64c5 5 11 5 16 0"/>
+  </g>
+</svg>

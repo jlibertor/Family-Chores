@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title">
+  <title>Rock Creature avatar</title>
+  <g fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path fill="#9ca3af" d="M19 63c0-23 11-39 29-39s29 16 29 39c0 15-12 24-29 24s-29-9-29-24Z"/>
+    <path fill="#6b7280" d="M27 59c8-5 18-7 31-5"/>
+    <path fill="#6b7280" d="M37 30 28 48"/>
+    <path fill="#6b7280" d="M59 31 69 50"/>
+    <path fill="#65a30d" d="M40 24c-2-7 1-13 7-16 1 7-1 12-7 16Z"/>
+    <path fill="#84cc16" d="M49 25c1-8 6-12 13-13-1 8-6 12-13 13Z"/>
+  </g>
+  <g class="eyes" fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round">
+    <path d="M35 58h9"/>
+    <path d="M53 58h9"/>
+  </g>
+  <g class="mouth" fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round">
+    <path d="M43 68c3 2 7 2 10 0"/>
+  </g>
+</svg>

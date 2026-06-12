@@ -10,6 +10,8 @@ Fields:
 
 - `id`
 - `display_name`
+- `nickname`, nullable; public UI uses this when present and falls back to `display_name`
+- `avatar_id`, nullable; selected SVG avatar id for UI display
 - `member_type`, such as `adult` or `child`
 - `sort_order`
 - `active`
@@ -25,7 +27,7 @@ Fields:
 - `id`
 - `name`
 - `description`
-- `frequency_type`, such as `daily`, `weekly`, `monthly`, or `as_needed`
+- `frequency_type`, such as `daily`, `weekdays`, `weekends`, `weekly`, `monthly`, or `as_needed`
 - `assignment_mode`: `household_anyone`, `assigned_individual`, or `per_person`
 - `assigned_member_id`, nullable legacy convenience field for one-person assignment
 - `alert_if_overdue`
@@ -67,6 +69,24 @@ Fields:
 - `notes`, nullable
 
 `completed_by_member_id` is the person who tapped complete. `responsible_member_id` is the person whose obligation was satisfied. Household-anyone chores use `responsible_member_id = null`.
+
+## Earned Bug
+
+Represents one temporary Bug Box reward earned from a successful chore completion.
+
+Fields:
+
+- `id`
+- `family_member_id`
+- `bug_id`, matching a static SVG bug definition in the frontend
+- `chore_id`
+- `completion_id`
+- `earned_at`
+- `expires_at`
+- `removed_at`, nullable
+- `removed_reason`, nullable
+
+Each successful chore completion creates one earned bug for the completing member. Bugs are active while `expires_at` is in the future and `removed_at` is blank. They are hidden after 3 days or after removal. Duplicate bug types are allowed.
 
 ## Device Session
 

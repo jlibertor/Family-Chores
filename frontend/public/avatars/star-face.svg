@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title">
+  <title>Star Face avatar</title>
+  <g fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path fill="#fde047" d="M48 9 58 32l25 2-19 16 6 25-22-13-22 13 6-25-19-16 25-2L48 9Z"/>
+  </g>
+  <g class="eyes" fill="#292524">
+    <circle cx="39" cy="46" r="4"/>
+    <circle cx="57" cy="46" r="4"/>
+    <circle cx="40" cy="44" r="1.2" fill="#fff"/>
+    <circle cx="58" cy="44" r="1.2" fill="#fff"/>
+  </g>
+  <g class="cheeks" fill="#fda4af">
+    <circle cx="32" cy="56" r="4"/>
+    <circle cx="64" cy="56" r="4"/>
+  </g>
+  <g class="mouth" fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round">
+    <path d="M42 57c4 4 8 4 12 0"/>
+  </g>
+</svg>

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title">
+  <title>Turtle avatar</title>
+  <g fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path fill="#65a30d" d="M22 58c0-20 11-33 26-33s26 13 26 33c0 17-11 29-26 29S22 75 22 58Z"/>
+    <path fill="#a3e635" d="M31 59c0-13 7-23 17-23s17 10 17 23c0 11-7 19-17 19s-17-8-17-19Z"/>
+    <path fill="#bef264" d="M39 38v38M57 38v38M32 56h32"/>
+    <path fill="#86efac" d="M21 60c-7 0-12 4-12 10 5 4 12 3 16-2"/>
+    <path fill="#86efac" d="M75 60c7 0 12 4 12 10-5 4-12 3-16-2"/>
+    <path fill="#86efac" d="M37 25c2-10 8-16 16-16s14 6 16 16"/>
+  </g>
+  <g class="eyes">
+    <circle cx="42" cy="27" r="6" fill="#dcfce7" stroke="#292524" stroke-width="4"/>
+    <circle cx="60" cy="27" r="6" fill="#dcfce7" stroke="#292524" stroke-width="4"/>
+    <circle cx="44" cy="28" r="2.8" fill="#292524"/>
+    <circle cx="58" cy="28" r="2.8" fill="#292524"/>
+  </g>
+  <g class="mouth" fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round">
+    <path d="M46 39c4 3 7 3 11 0"/>
+  </g>
+</svg>

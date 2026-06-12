@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title">
+  <title>White Bunny avatar</title>
+  <g fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path fill="#fffaf0" d="M35 35C26 17 25 6 34 5c8-1 13 13 14 28 4-15 11-27 19-24 9 3 5 17-6 31 11 8 15 25 8 36-7 11-35 11-42 0-7-12-3-29 8-41Z"/>
+    <path fill="#fecdd3" d="M36 15c3 5 5 12 6 19"/>
+    <path fill="#fecdd3" d="M62 18c-4 5-7 12-9 19"/>
+    <path fill="#f97316" d="M63 64c9-4 17 0 18 5-5 5-14 5-22 1l4-6Z"/>
+    <path fill="#22c55e" d="M78 64c1-5 4-8 9-10"/>
+  </g>
+  <g class="eyes" fill="#292524">
+    <circle cx="39" cy="54" r="4"/>
+    <circle cx="57" cy="54" r="4"/>
+    <circle cx="40" cy="52" r="1.2" fill="#fff"/>
+    <circle cx="58" cy="52" r="1.2" fill="#fff"/>
+  </g>
+  <g class="mouth" fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path fill="#fb7185" d="M48 61 43 58h10l-5 3Z"/>
+    <path d="M48 61v4"/>
+    <path d="M42 67c3 3 9 3 12 0"/>
+  </g>
+</svg>

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title">
+  <title>Axolotl avatar</title>
+  <g fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path fill="#f9a8d4" d="M25 53c0-18 10-30 23-30s23 12 23 30c0 19-10 32-23 32S25 72 25 53Z"/>
+    <path fill="#f472b6" d="M25 44c-9-8-14-17-11-28 9 3 14 10 16 21"/>
+    <path fill="#f472b6" d="M71 44c9-8 14-17 11-28-9 3-14 10-16 21"/>
+    <path fill="#fbcfe8" d="M25 56c-8 0-14 4-18 11"/>
+    <path fill="#fbcfe8" d="M71 56c8 0 14 4 18 11"/>
+    <path fill="#fbcfe8" d="M29 32c-7-2-13-1-19 4"/>
+    <path fill="#fbcfe8" d="M67 32c7-2 13-1 19 4"/>
+  </g>
+  <g class="eyes" fill="#292524">
+    <circle cx="39" cy="53" r="4"/>
+    <circle cx="57" cy="53" r="4"/>
+    <circle cx="40" cy="51" r="1.2" fill="#fff"/>
+    <circle cx="58" cy="51" r="1.2" fill="#fff"/>
+  </g>
+  <g class="mouth" fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round">
+    <path d="M41 65c5 5 9 5 14 0"/>
+  </g>
+</svg>

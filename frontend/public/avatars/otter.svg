@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title">
+  <title>Otter avatar</title>
+  <g fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path fill="#92400e" d="M24 53c0-18 10-29 24-29s24 11 24 29c0 20-11 34-24 34S24 73 24 53Z"/>
+    <path fill="#d6a05b" d="M31 59c0-11 7-19 17-19s17 8 17 19c0 12-8 21-17 21s-17-9-17-21Z"/>
+    <path fill="#92400e" d="M24 45c-6-2-10-7-9-12 7-1 12 2 16 8"/>
+    <path fill="#92400e" d="M72 45c6-2 10-7 9-12-7-1-12 2-16 8"/>
+    <path fill="#f5d0a2" d="M41 64c2 3 5 4 7 4s5-1 7-4"/>
+  </g>
+  <g class="eyes">
+    <circle cx="38" cy="49" r="7" fill="#fef3c7" stroke="#292524" stroke-width="4"/>
+    <circle cx="58" cy="49" r="7" fill="#fef3c7" stroke="#292524" stroke-width="4"/>
+    <circle cx="40" cy="50" r="3" fill="#292524"/>
+    <circle cx="56" cy="50" r="3" fill="#292524"/>
+  </g>
+  <g class="face" fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path fill="#292524" d="M48 56c4 0 7 2 7 5s-3 5-7 5-7-2-7-5 3-5 7-5Z"/>
+    <path d="M31 61h-9M34 67h-9M65 61h9M62 67h9"/>
+  </g>
+</svg>

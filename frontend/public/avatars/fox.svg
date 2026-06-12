@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title">
+  <title>Fox avatar</title>
+  <g fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path fill="#fb923c" d="M23 42 19 17l19 15a33 33 0 0 1 20 0l19-15-4 25c6 6 8 14 6 24-4 14-17 21-31 21S21 80 17 66c-2-10 0-18 6-24Z"/>
+    <path fill="#fff7ed" d="M31 54c4-10 11-16 17-16s13 6 17 16c-1 17-9 28-17 28S32 71 31 54Z"/>
+    <path fill="#fff7ed" d="M75 64c10-4 14-12 10-22-5 8-12 10-19 8"/>
+  </g>
+  <g class="eyes" fill="#292524">
+    <circle cx="39" cy="52" r="4"/>
+    <circle cx="57" cy="52" r="4"/>
+    <circle cx="40" cy="50" r="1.2" fill="#fff"/>
+    <circle cx="58" cy="50" r="1.2" fill="#fff"/>
+  </g>
+  <g class="mouth" fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path fill="#292524" d="M48 60 43 57h10l-5 3Z"/>
+    <path d="M43 66c4 3 7 3 11 0"/>
+  </g>
+</svg>

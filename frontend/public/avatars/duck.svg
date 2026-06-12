@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title">
+  <title>Duck avatar</title>
+  <g fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path fill="#fde047" d="M26 54c0-19 10-34 26-34s26 15 26 34c0 20-14 32-26 32S26 74 26 54Z"/>
+    <path fill="#facc15" d="M31 37c-9 1-15 8-15 17 0 8 6 13 14 13"/>
+    <path fill="#fb923c" d="M42 58c8-5 18-5 26 0-3 8-20 10-26 0Z"/>
+  </g>
+  <g class="eyes" fill="#292524">
+    <circle cx="42" cy="46" r="4"/>
+    <circle cx="60" cy="46" r="4"/>
+    <circle cx="43" cy="44" r="1.2" fill="#fff"/>
+    <circle cx="61" cy="44" r="1.2" fill="#fff"/>
+  </g>
+  <g class="mouth" fill="none" stroke="#292524" stroke-width="3" stroke-linecap="round">
+    <path d="M45 61c5 2 13 2 18 0"/>
+  </g>
+</svg>

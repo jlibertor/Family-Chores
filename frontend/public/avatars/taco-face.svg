@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title">
+  <title>Taco Face avatar</title>
+  <g fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path fill="#facc15" d="M15 64c3-23 16-37 33-37s30 14 33 37c-9 13-57 13-66 0Z"/>
+    <path fill="#84cc16" d="M26 49c4-9 12-13 22-13s18 4 22 13"/>
+    <path fill="#ef4444" d="M35 44h9"/>
+    <path fill="#ef4444" d="M56 44h9"/>
+    <path fill="#fb923c" d="M28 61c9 6 31 6 40 0"/>
+  </g>
+  <g class="eyes" fill="#292524">
+    <circle cx="39" cy="55" r="4"/>
+    <circle cx="57" cy="55" r="4"/>
+    <circle cx="40" cy="53" r="1.2" fill="#fff"/>
+    <circle cx="58" cy="53" r="1.2" fill="#fff"/>
+  </g>
+  <g class="mouth" fill="none" stroke="#292524" stroke-width="4" stroke-linecap="round">
+    <path d="M42 66c4 4 8 4 12 0"/>
+  </g>
+</svg>
