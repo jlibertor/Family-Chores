@@ -431,7 +431,8 @@ function App() {
     : selectedMember
       ? displayFamilyMemberPublic(selectedMember)
       : 'Login'
-  const canAccessSetup = selectedMember?.member_type === 'adult' && session?.mode !== 'kiosk'
+  const setupMember = session?.mode === 'kiosk' ? kioskMember : selectedMember
+  const canAccessSetup = setupMember?.member_type === 'adult'
 
   function resetIdleTimer() {
     markIdleActivity(lastActivityRef, setIdleRemainingMs)
