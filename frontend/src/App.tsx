@@ -15,6 +15,10 @@ type Member = {
   display_name: string
   nickname: string | null
   avatar_id: string | null
+  phone_number?: string | null
+  receives_fish_texts?: 0 | 1
+  fish_text_start_time?: string | null
+  fish_text_stop_time?: string | null
   member_type: MemberType
   sort_order: number
   active: 0 | 1
@@ -97,6 +101,10 @@ type MemberDraft = {
   display_name: string
   nickname: string
   avatar_id: string
+  phone_number: string
+  receives_fish_texts: 0 | 1
+  fish_text_start_time: string
+  fish_text_stop_time: string
   member_type: MemberType
   sort_order: number
   active: 0 | 1
@@ -140,6 +148,8 @@ const memberKey = 'family-chores.member-id'
 const sessionKey = 'family-chores.session'
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') ?? ''
 const idleRedirectMs = 3 * 60 * 1000
+const defaultFishTextStartTime = '09:00'
+const defaultFishTextStopTime = '23:00'
 
 const routes = ['/today', '/display', '/aquarium', '/aquarium-friends', '/choose-mode', '/member', '/kiosk', '/history', '/bug-box', '/admin'] as const
 
@@ -157,6 +167,10 @@ const emptyMemberDraft: MemberDraft = {
   display_name: '',
   nickname: '',
   avatar_id: defaultAvatarId,
+  phone_number: '',
+  receives_fish_texts: 0,
+  fish_text_start_time: defaultFishTextStartTime,
+  fish_text_stop_time: defaultFishTextStopTime,
   member_type: 'child',
   sort_order: 10,
   active: 1,
@@ -341,6 +355,7 @@ function App() {
   )
   const routeRef = useRef(route)
   const lastActivityRef = useRef(0)
+  const kioskRestoreInFlightRef = useRef(false)
   const [members, setMembers] = useState<Member[]>([])
   const [chores, setChores] = useState<Chore[]>([])
   const [memberChores, setMemberChores] = useState<Chore[]>([])
@@ -388,7 +403,7 @@ function App() {
     () => 'Notification' in window && Notification.permission === 'granted',
   )
   const [currentTime, setCurrentTime] = useState(() => new Date())
-  const [idleRemainingMs, setIdleRemainingMs] = useState(idleRedirectMs)
+  const [, setIdleRemainingMs] = useState(idleRedirectMs)
 
   const selectedMember = useMemo(
     () => members.find((member) => member.id === selectedMemberId) ?? null,
@@ -411,6 +426,11 @@ function App() {
   const kioskOtherChores = sortChoresForHousehold(kioskChores.filter((chore) => chore.is_due !== 1))
   const deviceViewLabel = session?.mode === 'kiosk' ? 'Kiosk view' : selectedMemberId ? 'My view' : 'Login'
   const householdSessionLabel = session?.mode === 'kiosk' ? 'Kiosk' : selectedMember ? displayFamilyMemberPublic(selectedMember) : ''
+  const currentLoginLabel = session?.mode === 'kiosk'
+    ? 'Kiosk mode'
+    : selectedMember
+      ? displayFamilyMemberPublic(selectedMember)
+      : 'Login'
   const canAccessSetup = selectedMember?.member_type === 'adult' && session?.mode !== 'kiosk'
 
   function resetIdleTimer() {
@@ -425,6 +445,19 @@ function App() {
     setPendingChore(null)
     setSuccessMessage('')
     setSuccessBugId(null)
+  }
+
+  function clearMemberSessionState() {
+    localStorage.removeItem(memberKey)
+    localStorage.removeItem(sessionKey)
+    setSelectedMemberId(null)
+    setSession(null)
+    setMemberChores([])
+    setBugBoxMemberId(null)
+    setKioskMemberId(null)
+    setKioskChores([])
+    setPendingChore(null)
+    setCompletionNote('')
   }
 
   async function refreshHousehold(silent = false) {
@@ -548,6 +581,30 @@ function App() {
   useEffect(() => {
     routeRef.current = route
   }, [route])
+
+  useEffect(() => {
+    if (route !== '/aquarium' || session?.mode === 'kiosk' || kioskRestoreInFlightRef.current) {
+      return
+    }
+
+    kioskRestoreInFlightRef.current = true
+    clearMemberSessionState()
+
+    void api<{ ok: boolean; session: SessionState }>('/api/session/kiosk', {
+      method: 'POST',
+      body: JSON.stringify({ deviceLabel: 'Kitchen Tablet' }),
+    })
+      .then((data) => {
+        localStorage.setItem(sessionKey, JSON.stringify(data.session))
+        setSession(data.session)
+      })
+      .catch((currentError) => {
+        setError(currentError instanceof Error ? currentError.message : 'Could not restore kiosk mode.')
+      })
+      .finally(() => {
+        kioskRestoreInFlightRef.current = false
+      })
+  }, [route, session?.mode])
 
   useEffect(() => {
     const activityEvents: Array<keyof WindowEventMap> = ['pointerdown', 'keydown', 'touchstart', 'scroll']
@@ -903,10 +960,10 @@ function App() {
     setTextModeSubmitting(true)
 
     try {
-      const data = await api<{ ok: boolean; result: { sent: boolean; skipped: boolean } }>('/api/fish-notifications/current-mode', {
+      const data = await api<{ ok: boolean; result: { sent: boolean; skipped: boolean; reason?: string } }>('/api/fish-notifications/current-mode', {
         method: 'POST',
       })
-      setSuccessMessage(data.result.skipped ? 'Fish text was just sent.' : 'Fish text sent.')
+      setSuccessMessage(data.result.reason === 'quiet_hours' ? 'Fish text skipped outside the text window.' : data.result.skipped ? 'Fish text was just sent.' : 'Fish text sent.')
     } catch (currentError) {
       setError(currentError instanceof Error ? currentError.message : 'Could not send fish text.')
     } finally {
@@ -970,9 +1027,7 @@ function App() {
           <button type="button" onClick={() => navigate('/bug-box')}>Bug Box</button>
           {canAccessSetup && <button type="button" onClick={() => navigate('/admin')}>Setup</button>}
         </nav>
-        <span className="idle-countdown" aria-live="polite">
-          Aquarium in {formatIdleCountdown(idleRemainingMs)}
-        </span>
+        <span className="idle-countdown" aria-live="polite">{currentLoginLabel}</span>
       </header>
 
       {loadState === 'loading' && <p className="notice">Loading household data...</p>}
@@ -1933,6 +1988,15 @@ function AdminView({
               onChange={(avatarId) => onMemberDraftChange({ ...memberDraft, avatar_id: avatarId })}
             />
             <label>
+              Phone number
+              <input
+                inputMode="tel"
+                value={memberDraft.phone_number}
+                onChange={(event) => onMemberDraftChange({ ...memberDraft, phone_number: event.target.value })}
+                placeholder="310-555-1234"
+              />
+            </label>
+            <label>
               Type
               <select
                 value={memberDraft.member_type}
@@ -1958,6 +2022,30 @@ function AdminView({
               />
               Active
             </label>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={memberDraft.receives_fish_texts === 1}
+                onChange={(event) => onMemberDraftChange({ ...memberDraft, receives_fish_texts: event.target.checked ? 1 : 0 })}
+              />
+              Receives fish texts
+            </label>
+            <label>
+              Fish texts start (Pacific)
+              <input
+                type="time"
+                value={memberDraft.fish_text_start_time}
+                onChange={(event) => onMemberDraftChange({ ...memberDraft, fish_text_start_time: event.target.value })}
+              />
+            </label>
+            <label>
+              Fish texts stop (Pacific)
+              <input
+                type="time"
+                value={memberDraft.fish_text_stop_time}
+                onChange={(event) => onMemberDraftChange({ ...memberDraft, fish_text_stop_time: event.target.value })}
+              />
+            </label>
             <div className="action-row">
               <button type="button" className="primary-action" onClick={onSaveMember}>
                 Save member
@@ -1974,6 +2062,9 @@ function AdminView({
               <div className="member-grid-header" aria-hidden="true">
                 <span>Name</span>
                 <span>Type</span>
+                <span>Phone</span>
+                <span>Fish texts</span>
+                <span>Text window</span>
                 <span>Sort order</span>
                 <span>Active</span>
                 <span>Actions</span>
@@ -1985,6 +2076,9 @@ function AdminView({
                     <strong>{displayFamilyMemberForSetup(member)}</strong>
                   </span>
                   <span>{member.member_type}</span>
+                  <span>{member.phone_number || 'None'}</span>
+                  <span>{member.receives_fish_texts ? 'Yes' : 'No'}</span>
+                  <span>{formatFishTextWindow(member)}</span>
                   <span>{member.sort_order}</span>
                   <span>{member.active ? 'Yes' : 'No'}</span>
                   <div className="member-grid-actions">
@@ -1995,6 +2089,10 @@ function AdminView({
                           ...member,
                           nickname: member.nickname ?? '',
                           avatar_id: member.avatar_id ?? defaultAvatarId,
+                          phone_number: member.phone_number ?? '',
+                          receives_fish_texts: member.receives_fish_texts ?? 0,
+                          fish_text_start_time: member.fish_text_start_time ?? defaultFishTextStartTime,
+                          fish_text_stop_time: member.fish_text_stop_time ?? defaultFishTextStopTime,
                         })
                       }
                     >
@@ -2563,6 +2661,12 @@ function formatTime(value: string) {
   }).format(new Date(`${value}Z`))
 }
 
+function formatFishTextWindow(member: Member) {
+  const startTime = member.fish_text_start_time ?? defaultFishTextStartTime
+  const stopTime = member.fish_text_stop_time ?? defaultFishTextStopTime
+  return `${startTime}-${stopTime}`
+}
+
 function activityDayLabel(value: string) {
   const date = new Date(`${value}Z`)
   const today = startOfLocalDay(new Date())
@@ -2592,13 +2696,6 @@ function formatCompactDateTime(value: Date) {
     hour: 'numeric',
     minute: '2-digit',
   }).format(value)
-}
-
-function formatIdleCountdown(valueMs: number) {
-  const totalSeconds = Math.max(0, Math.ceil(valueMs / 1000))
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = totalSeconds % 60
-  return `${minutes}:${String(seconds).padStart(2, '0')}`
 }
 
 function bugTimeLeft(expiresAt: string) {

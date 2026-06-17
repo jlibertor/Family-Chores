@@ -152,6 +152,8 @@ const envFlag = (value: string | undefined, fallback: boolean) => {
 };
 
 const householdTimeZone = "America/Los_Angeles";
+const defaultFishTextStartTime = "09:00";
+const defaultFishTextStopTime = "23:00";
 
 type HouseholdCalendar = {
   todayDate: string;
@@ -196,6 +198,17 @@ function localDateParts(date: Date, timeZone = householdTimeZone) {
     month: value("month"),
     day: value("day"),
   };
+}
+
+function localTimeOfDay(date = new Date(), timeZone = householdTimeZone) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const value = (type: string) => parts.find((part) => part.type === type)?.value ?? "00";
+  return `${value("hour")}:${value("minute")}`;
 }
 
 function offsetMsForTimeZone(date: Date, timeZone = householdTimeZone) {
@@ -412,6 +425,10 @@ type SmsConfigDiagnostics = {
   authMethod: "auth_token" | "api_key" | "missing";
   hasFromPhoneNumber: boolean;
   recipientCount: number;
+  configuredFishTextRecipientCount: number;
+  quietHoursBlockedRecipientCount: number;
+  recipientTimeZone: string;
+  recipientLocalTime: string;
   missingSettings: string[];
 };
 
@@ -661,18 +678,119 @@ function chooseCurrentAquariumModeMessage(mood: AquariumMood, lastMessage: strin
   return chooseEmojiFromPool(fishEmojiPools.happy, lastMessage);
 }
 
-function smsRecipients(env: Env) {
-  const testMode = envFlag(env.SMS_TEST_MODE, true);
-  const testNumber = env.SMS_TEST_NUMBER?.trim() || "+13105035221";
+function normalizePhoneNumber(value: unknown) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const digits = trimmed.replace(/[^\d]/g, "");
 
-  if (testMode) {
-    return [testNumber];
+  if (trimmed.startsWith("+") && /^\+\d{8,15}$/.test(trimmed.replace(/[\s().-]/g, ""))) {
+    return `+${digits}`;
   }
 
-  return (env.ALERTING_TO_PHONE_NUMBERS ?? "")
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  return null;
+}
+
+function normalizeFishTextTime(value: unknown, fallback: string) {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(trimmed) ? trimmed : fallback;
+}
+
+function timeOfDayMinutes(value: string) {
+  const [hours, minutes] = value.split(":").map((part) => Number(part));
+  return hours * 60 + minutes;
+}
+
+function isInsideFishTextWindow(localTime: string, startTime: string, stopTime: string) {
+  const current = timeOfDayMinutes(localTime);
+  const start = timeOfDayMinutes(startTime);
+  const stop = timeOfDayMinutes(stopTime);
+
+  if (start === stop) return true;
+  if (start < stop) return current >= start && current < stop;
+  return current >= start || current < stop;
+}
+
+type SmsRecipientState = {
+  recipients: string[];
+  configuredFishTextRecipientCount: number;
+  quietHoursBlockedRecipientCount: number;
+  localTime: string;
+  timeZone: string;
+};
+
+async function getSmsRecipientState(env: Env): Promise<SmsRecipientState> {
+  const testMode = envFlag(env.SMS_TEST_MODE, true);
+  const testNumber = env.SMS_TEST_NUMBER?.trim() || "+13105035221";
+  const localTime = localTimeOfDay();
+
+  if (testMode) {
+    return {
+      recipients: [testNumber],
+      configuredFishTextRecipientCount: 1,
+      quietHoursBlockedRecipientCount: 0,
+      localTime,
+      timeZone: householdTimeZone,
+    };
+  }
+
+  const { results } = await env.DB
+    .prepare(
+      `SELECT phone_number, fish_text_start_time, fish_text_stop_time
+       FROM family_members
+       WHERE active = 1
+        AND receives_fish_texts = 1
+        AND phone_number IS NOT NULL
+        AND TRIM(phone_number) <> ''
+       ORDER BY sort_order, display_name`,
+    )
+    .all<{ phone_number: string; fish_text_start_time: string | null; fish_text_stop_time: string | null }>();
+  const configuredRecipients = new Set<string>();
+  const eligibleRecipients = new Set<string>();
+
+  for (const row of results) {
+    const phoneNumber = normalizePhoneNumber(row.phone_number) ?? row.phone_number.trim();
+    const startTime = normalizeFishTextTime(row.fish_text_start_time, defaultFishTextStartTime);
+    const stopTime = normalizeFishTextTime(row.fish_text_stop_time, defaultFishTextStopTime);
+
+    if (!phoneNumber) continue;
+
+    configuredRecipients.add(phoneNumber);
+
+    if (isInsideFishTextWindow(localTime, startTime, stopTime)) {
+      eligibleRecipients.add(phoneNumber);
+    }
+  }
+
+  if (configuredRecipients.size > 0) {
+    return {
+      recipients: [...eligibleRecipients],
+      configuredFishTextRecipientCount: configuredRecipients.size,
+      quietHoursBlockedRecipientCount: Math.max(0, configuredRecipients.size - eligibleRecipients.size),
+      localTime,
+      timeZone: householdTimeZone,
+    };
+  }
+
+  const fallbackRecipients = [...new Set((env.ALERTING_TO_PHONE_NUMBERS ?? "")
     .split(",")
     .map((number) => number.trim())
-    .filter((number) => number.length > 0);
+    .filter((number) => number.length > 0))];
+
+  return {
+    recipients: fallbackRecipients,
+    configuredFishTextRecipientCount: fallbackRecipients.length,
+    quietHoursBlockedRecipientCount: 0,
+    localTime,
+    timeZone: householdTimeZone,
+  };
+}
+
+async function smsRecipients(env: Env) {
+  return (await getSmsRecipientState(env)).recipients;
 }
 
 function stringValue(value: unknown) {
@@ -681,7 +799,7 @@ function stringValue(value: unknown) {
   return null;
 }
 
-function getSmsConfigDiagnostics(env: Env): SmsConfigDiagnostics {
+async function getSmsConfigDiagnostics(env: Env): Promise<SmsConfigDiagnostics> {
   const smsEnabled = envFlag(env.SMS_ENABLED, true);
   const testMode = envFlag(env.SMS_TEST_MODE, true);
   const hasAccountSid = Boolean(env.TWILIO_ACCOUNT_SID?.trim());
@@ -691,7 +809,8 @@ function getSmsConfigDiagnostics(env: Env): SmsConfigDiagnostics {
   const hasApiKeyCredentials = hasApiKeySid && hasApiKeySecret;
   const authMethod = hasApiKeyCredentials ? "api_key" : hasAuthToken ? "auth_token" : "missing";
   const hasFromPhoneNumber = Boolean(env.ALERTING_FROM_PHONE_NUMBER?.trim());
-  const recipientCount = smsRecipients(env).length;
+  const recipientState = await getSmsRecipientState(env);
+  const recipientCount = recipientState.recipients.length;
   const missingSettings: string[] = [];
 
   if (!hasAccountSid) missingSettings.push("TWILIO_ACCOUNT_SID");
@@ -705,7 +824,9 @@ function getSmsConfigDiagnostics(env: Env): SmsConfigDiagnostics {
     }
   }
   if (!hasFromPhoneNumber) missingSettings.push("ALERTING_FROM_PHONE_NUMBER");
-  if (recipientCount === 0) missingSettings.push(testMode ? "SMS_TEST_NUMBER" : "ALERTING_TO_PHONE_NUMBERS");
+  if (recipientCount === 0 && recipientState.configuredFishTextRecipientCount === 0) {
+    missingSettings.push(testMode ? "SMS_TEST_NUMBER" : "fish text recipients");
+  }
 
   return {
     smsEnabled,
@@ -717,6 +838,10 @@ function getSmsConfigDiagnostics(env: Env): SmsConfigDiagnostics {
     authMethod,
     hasFromPhoneNumber,
     recipientCount,
+    configuredFishTextRecipientCount: recipientState.configuredFishTextRecipientCount,
+    quietHoursBlockedRecipientCount: recipientState.quietHoursBlockedRecipientCount,
+    recipientTimeZone: recipientState.timeZone,
+    recipientLocalTime: recipientState.localTime,
     missingSettings,
   };
 }
@@ -727,6 +852,16 @@ class SmsConfigurationError extends Error {
   constructor(message: string, diagnostics: SmsDiagnosticContext) {
     super(message);
     this.name = "SmsConfigurationError";
+    this.diagnostics = diagnostics;
+  }
+}
+
+class SmsQuietHoursError extends Error {
+  readonly diagnostics: SmsDiagnosticContext;
+
+  constructor(message: string, diagnostics: SmsDiagnosticContext) {
+    super(message);
+    this.name = "SmsQuietHoursError";
     this.diagnostics = diagnostics;
   }
 }
@@ -756,7 +891,7 @@ class TwilioSmsError extends Error {
 }
 
 async function sendTwilioSms(env: Env, message: string): Promise<SmsProviderResult[]> {
-  const configDiagnostics = getSmsConfigDiagnostics(env);
+  const configDiagnostics = await getSmsConfigDiagnostics(env);
   const baseDiagnostics: SmsDiagnosticContext = { sms: configDiagnostics };
   const accountSid = env.TWILIO_ACCOUNT_SID?.trim();
   const authToken = env.TWILIO_AUTH_TOKEN?.trim();
@@ -765,15 +900,20 @@ async function sendTwilioSms(env: Env, message: string): Promise<SmsProviderResu
   const authUsername = apiKeySid && apiKeySecret ? apiKeySid : accountSid;
   const authPassword = apiKeySid && apiKeySecret ? apiKeySecret : authToken;
   const fromPhoneNumber = env.ALERTING_FROM_PHONE_NUMBER?.trim();
-  const recipients = smsRecipients(env);
+  const recipientState = await getSmsRecipientState(env);
+  const recipients = recipientState.recipients;
 
   if (!configDiagnostics.smsEnabled) {
     throw new SmsConfigurationError("SMS is disabled by configuration.", baseDiagnostics);
   }
 
-  if (!accountSid || !authUsername || !authPassword || !fromPhoneNumber || recipients.length === 0) {
+  if (!accountSid || !authUsername || !authPassword || !fromPhoneNumber || (recipients.length === 0 && recipientState.configuredFishTextRecipientCount === 0)) {
     const missing = configDiagnostics.missingSettings.join(", ");
     throw new SmsConfigurationError(`SMS configuration is incomplete: missing ${missing}.`, baseDiagnostics);
+  }
+
+  if (recipients.length === 0) {
+    throw new SmsQuietHoursError("No fish text recipients are currently inside their allowed text window.", baseDiagnostics);
   }
 
   const authHeader = btoa(`${authUsername}:${authPassword}`);
@@ -832,7 +972,7 @@ async function sendTwilioSms(env: Env, message: string): Promise<SmsProviderResu
 function smsFailureDetails(error: unknown): SmsFailureDetails {
   const fallbackMessage = error instanceof Error ? error.message : "Unknown SMS error.";
 
-  if (error instanceof SmsConfigurationError) {
+  if (error instanceof SmsConfigurationError || error instanceof SmsQuietHoursError) {
     return {
       errorMessage: fallbackMessage,
       providerStatus: null,
@@ -950,7 +1090,7 @@ async function sendFishNotification(
         {
           providerStatus: result.providerStatus,
           diagnosticContext: {
-            sms: getSmsConfigDiagnostics(env),
+            sms: await getSmsConfigDiagnostics(env),
             provider: {
               recipient: result.recipient,
               twilioStatus: result.providerStatus,
@@ -962,6 +1102,22 @@ async function sendFishNotification(
 
     return { sent: true, skipped: false, reason, type, mood, hungerScore, message };
   } catch (error) {
+    if (error instanceof SmsQuietHoursError) {
+      await recordFishNotification(env.DB, type, mood, hungerScore, message, null, null, "skipped", "quiet_hours", {
+        diagnosticContext: error.diagnostics,
+      });
+      return {
+        sent: false,
+        skipped: true,
+        reason: "quiet_hours",
+        type,
+        mood,
+        hungerScore,
+        message,
+        diagnostics: error.diagnostics,
+      };
+    }
+
     const failure = smsFailureDetails(error);
     await recordFishNotification(env.DB, type, mood, hungerScore, message, null, null, "failed", reason, {
       errorMessage: failure.errorMessage,
@@ -1098,7 +1254,7 @@ async function sendCurrentAquariumModeNotification(env: Env): Promise<CurrentMod
         {
           providerStatus: result.providerStatus,
           diagnosticContext: {
-            sms: getSmsConfigDiagnostics(env),
+            sms: await getSmsConfigDiagnostics(env),
             provider: {
               recipient: result.recipient,
               twilioStatus: result.providerStatus,
@@ -1119,6 +1275,23 @@ async function sendCurrentAquariumModeNotification(env: Env): Promise<CurrentMod
       aquariumMood,
     };
   } catch (error) {
+    if (error instanceof SmsQuietHoursError) {
+      await recordFishNotification(env.DB, "test", mood, 0, message, null, null, "skipped", "quiet_hours", {
+        diagnosticContext: error.diagnostics,
+      });
+      return {
+        sent: false,
+        skipped: true,
+        reason: "quiet_hours",
+        type: "test",
+        mood,
+        hungerScore: 0,
+        message,
+        aquariumMood,
+        diagnostics: error.diagnostics,
+      };
+    }
+
     const failure = smsFailureDetails(error);
     await recordFishNotification(env.DB, "test", mood, 0, message, null, null, "failed", "current_mode_button", {
       errorMessage: failure.errorMessage,
@@ -1577,10 +1750,11 @@ async function createDeviceSession(
   return result.meta.last_row_id;
 }
 
-async function listMembers(db: D1Database, includeInactive = false) {
+async function listMembers(db: D1Database, includeInactive = false, includeSmsPreferences = false) {
+  const smsColumns = includeSmsPreferences ? ", phone_number, receives_fish_texts, fish_text_start_time, fish_text_stop_time" : "";
   const { results } = await db
     .prepare(
-      `SELECT id, display_name, nickname, avatar_id, member_type, sort_order, active, created_at, updated_at
+      `SELECT id, display_name, nickname, avatar_id, member_type, sort_order, active, created_at, updated_at${smsColumns}
        FROM family_members
        ${includeInactive ? "" : "WHERE active = 1"}
        ORDER BY sort_order, display_name`,
@@ -2104,35 +2278,70 @@ async function saveMember(request: Request, db: D1Database, id: number | null) {
   const memberType = isMemberType(body.member_type) ? body.member_type : null;
   const sortOrder = asInteger(body.sort_order);
   const active = asActiveFlag(body.active);
+  const phoneNumber = normalizePhoneNumber(body.phone_number);
+  const receivesFishTexts = asActiveFlag(body.receives_fish_texts, 0);
+  const fishTextStartTime = normalizeFishTextTime(body.fish_text_start_time, defaultFishTextStartTime);
+  const fishTextStopTime = normalizeFishTextTime(body.fish_text_stop_time, defaultFishTextStopTime);
 
   if (!displayName || !memberType) {
     return badRequest("Display name and member type are required.");
+  }
+
+  if (receivesFishTexts === 1 && !phoneNumber) {
+    return badRequest("A valid phone number is required for fish text messages.");
   }
 
   if (id) {
     await db
       .prepare(
         `UPDATE family_members
-         SET display_name = ?, nickname = ?, avatar_id = ?, member_type = ?, sort_order = ?, active = ?, updated_at = datetime('now')
+         SET display_name = ?, nickname = ?, avatar_id = ?, member_type = ?, sort_order = ?, active = ?, phone_number = ?, receives_fish_texts = ?, fish_text_start_time = ?, fish_text_stop_time = ?, updated_at = datetime('now')
          WHERE id = ?`,
       )
-      .bind(displayName, nickname, avatarId, memberType, sortOrder, active, id)
+      .bind(displayName, nickname, avatarId, memberType, sortOrder, active, phoneNumber, receivesFishTexts, fishTextStartTime, fishTextStopTime, id)
       .run();
 
-    return json({ ok: true, member: { id, display_name: displayName, nickname, avatar_id: avatarId, member_type: memberType, sort_order: sortOrder, active } });
+    return json({
+      ok: true,
+      member: {
+        id,
+        display_name: displayName,
+        nickname,
+        avatar_id: avatarId,
+        member_type: memberType,
+        sort_order: sortOrder,
+        active,
+        phone_number: phoneNumber,
+        receives_fish_texts: receivesFishTexts,
+        fish_text_start_time: fishTextStartTime,
+        fish_text_stop_time: fishTextStopTime,
+      },
+    });
   }
 
   const result = await db
     .prepare(
-      `INSERT INTO family_members (display_name, nickname, avatar_id, member_type, sort_order, active)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO family_members (display_name, nickname, avatar_id, member_type, sort_order, active, phone_number, receives_fish_texts, fish_text_start_time, fish_text_stop_time)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .bind(displayName, nickname, avatarId, memberType, sortOrder, active)
+    .bind(displayName, nickname, avatarId, memberType, sortOrder, active, phoneNumber, receivesFishTexts, fishTextStartTime, fishTextStopTime)
     .run();
 
   return json({
     ok: true,
-    member: { id: result.meta.last_row_id, display_name: displayName, nickname, avatar_id: avatarId, member_type: memberType, sort_order: sortOrder, active },
+    member: {
+      id: result.meta.last_row_id,
+      display_name: displayName,
+      nickname,
+      avatar_id: avatarId,
+      member_type: memberType,
+      sort_order: sortOrder,
+      active,
+      phone_number: phoneNumber,
+      receives_fish_texts: receivesFishTexts,
+      fish_text_start_time: fishTextStartTime,
+      fish_text_stop_time: fishTextStopTime,
+    },
   });
 }
 
@@ -2524,7 +2733,7 @@ export default {
     }
 
     if (request.method === "GET" && url.pathname === "/api/admin/members") {
-      return listMembers(env.DB);
+      return listMembers(env.DB, true, true);
     }
 
     if (request.method === "POST" && url.pathname === "/api/admin/members") {
@@ -2590,8 +2799,8 @@ export default {
         sms: {
           enabled: envFlag(env.SMS_ENABLED, true),
           testMode: envFlag(env.SMS_TEST_MODE, true),
-          recipients: smsRecipients(env),
-          diagnostics: getSmsConfigDiagnostics(env),
+          recipients: await smsRecipients(env),
+          diagnostics: await getSmsConfigDiagnostics(env),
         },
         hunger: calculation,
       });

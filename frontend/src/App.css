@@ -1938,7 +1938,15 @@ button:focus-visible {
 
   .member-grid-header,
   .member-grid-row {
-    grid-template-columns: minmax(140px, 1.4fr) minmax(80px, 0.8fr) minmax(90px, 0.7fr) minmax(70px, 0.6fr) minmax(150px, 1fr);
+    grid-template-columns:
+      minmax(126px, 1.25fr)
+      minmax(64px, 0.55fr)
+      minmax(110px, 0.9fr)
+      minmax(66px, 0.55fr)
+      minmax(96px, 0.75fr)
+      minmax(64px, 0.5fr)
+      minmax(52px, 0.45fr)
+      minmax(108px, 0.75fr);
     align-items: center;
   }
 
