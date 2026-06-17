@@ -427,6 +427,7 @@ type SmsConfigDiagnostics = {
   recipientCount: number;
   configuredFishTextRecipientCount: number;
   quietHoursBlockedRecipientCount: number;
+  completedTodayBlockedRecipientCount: number;
   recipientTimeZone: string;
   recipientLocalTime: string;
   missingSettings: string[];
@@ -678,6 +679,12 @@ function chooseCurrentAquariumModeMessage(mood: AquariumMood, lastMessage: strin
   return chooseEmojiFromPool(fishEmojiPools.happy, lastMessage);
 }
 
+function shouldTextOnlyMembersWithoutChoresToday(type: FishNotificationType, mood: FishHungerMood | null) {
+  if (type === "hunger") return mood !== "happy";
+  if (type === "test") return mood === "slightly_hungry" || mood === "hungry" || mood === "very_hungry" || mood === "emergency_hunger";
+  return false;
+}
+
 function normalizePhoneNumber(value: unknown) {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -718,11 +725,31 @@ type SmsRecipientState = {
   recipients: string[];
   configuredFishTextRecipientCount: number;
   quietHoursBlockedRecipientCount: number;
+  completedTodayBlockedRecipientCount: number;
   localTime: string;
   timeZone: string;
 };
 
-async function getSmsRecipientState(env: Env): Promise<SmsRecipientState> {
+type SmsRecipientOptions = {
+  onlyMembersWithoutChoresToday?: boolean;
+};
+
+async function getMembersWithCompletionsToday(db: D1Database) {
+  const calendar = getHouseholdCalendar();
+  const { results } = await db
+    .prepare(
+      `SELECT DISTINCT completed_by_member_id
+       FROM chore_completions
+       WHERE completed_at >= ?
+        AND completed_at < ?`,
+    )
+    .bind(calendar.todayStart, calendar.todayEnd)
+    .all<{ completed_by_member_id: number }>();
+
+  return new Set(results.map((row) => row.completed_by_member_id));
+}
+
+async function getSmsRecipientState(env: Env, options: SmsRecipientOptions = {}): Promise<SmsRecipientState> {
   const testMode = envFlag(env.SMS_TEST_MODE, true);
   const testNumber = env.SMS_TEST_NUMBER?.trim() || "+13105035221";
   const localTime = localTimeOfDay();
@@ -732,6 +759,7 @@ async function getSmsRecipientState(env: Env): Promise<SmsRecipientState> {
       recipients: [testNumber],
       configuredFishTextRecipientCount: 1,
       quietHoursBlockedRecipientCount: 0,
+      completedTodayBlockedRecipientCount: 0,
       localTime,
       timeZone: householdTimeZone,
     };
@@ -739,7 +767,7 @@ async function getSmsRecipientState(env: Env): Promise<SmsRecipientState> {
 
   const { results } = await env.DB
     .prepare(
-      `SELECT phone_number, fish_text_start_time, fish_text_stop_time
+      `SELECT id, phone_number, fish_text_start_time, fish_text_stop_time
        FROM family_members
        WHERE active = 1
         AND receives_fish_texts = 1
@@ -747,9 +775,12 @@ async function getSmsRecipientState(env: Env): Promise<SmsRecipientState> {
         AND TRIM(phone_number) <> ''
        ORDER BY sort_order, display_name`,
     )
-    .all<{ phone_number: string; fish_text_start_time: string | null; fish_text_stop_time: string | null }>();
+    .all<{ id: number; phone_number: string; fish_text_start_time: string | null; fish_text_stop_time: string | null }>();
   const configuredRecipients = new Set<string>();
   const eligibleRecipients = new Set<string>();
+  const completedMemberIds = options.onlyMembersWithoutChoresToday ? await getMembersWithCompletionsToday(env.DB) : new Set<number>();
+  let quietHoursBlockedRecipientCount = 0;
+  let completedTodayBlockedRecipientCount = 0;
 
   for (const row of results) {
     const phoneNumber = normalizePhoneNumber(row.phone_number) ?? row.phone_number.trim();
@@ -760,16 +791,36 @@ async function getSmsRecipientState(env: Env): Promise<SmsRecipientState> {
 
     configuredRecipients.add(phoneNumber);
 
-    if (isInsideFishTextWindow(localTime, startTime, stopTime)) {
-      eligibleRecipients.add(phoneNumber);
+    if (!isInsideFishTextWindow(localTime, startTime, stopTime)) {
+      quietHoursBlockedRecipientCount += 1;
+      continue;
     }
+
+    if (completedMemberIds.has(row.id)) {
+      completedTodayBlockedRecipientCount += 1;
+      continue;
+    }
+
+    eligibleRecipients.add(phoneNumber);
   }
 
   if (configuredRecipients.size > 0) {
     return {
       recipients: [...eligibleRecipients],
       configuredFishTextRecipientCount: configuredRecipients.size,
-      quietHoursBlockedRecipientCount: Math.max(0, configuredRecipients.size - eligibleRecipients.size),
+      quietHoursBlockedRecipientCount,
+      completedTodayBlockedRecipientCount,
+      localTime,
+      timeZone: householdTimeZone,
+    };
+  }
+
+  if (options.onlyMembersWithoutChoresToday) {
+    return {
+      recipients: [],
+      configuredFishTextRecipientCount: 0,
+      quietHoursBlockedRecipientCount: 0,
+      completedTodayBlockedRecipientCount: 0,
       localTime,
       timeZone: householdTimeZone,
     };
@@ -784,6 +835,7 @@ async function getSmsRecipientState(env: Env): Promise<SmsRecipientState> {
     recipients: fallbackRecipients,
     configuredFishTextRecipientCount: fallbackRecipients.length,
     quietHoursBlockedRecipientCount: 0,
+    completedTodayBlockedRecipientCount: 0,
     localTime,
     timeZone: householdTimeZone,
   };
@@ -799,7 +851,7 @@ function stringValue(value: unknown) {
   return null;
 }
 
-async function getSmsConfigDiagnostics(env: Env): Promise<SmsConfigDiagnostics> {
+async function getSmsConfigDiagnostics(env: Env, options: SmsRecipientOptions = {}): Promise<SmsConfigDiagnostics> {
   const smsEnabled = envFlag(env.SMS_ENABLED, true);
   const testMode = envFlag(env.SMS_TEST_MODE, true);
   const hasAccountSid = Boolean(env.TWILIO_ACCOUNT_SID?.trim());
@@ -809,7 +861,7 @@ async function getSmsConfigDiagnostics(env: Env): Promise<SmsConfigDiagnostics> 
   const hasApiKeyCredentials = hasApiKeySid && hasApiKeySecret;
   const authMethod = hasApiKeyCredentials ? "api_key" : hasAuthToken ? "auth_token" : "missing";
   const hasFromPhoneNumber = Boolean(env.ALERTING_FROM_PHONE_NUMBER?.trim());
-  const recipientState = await getSmsRecipientState(env);
+  const recipientState = await getSmsRecipientState(env, options);
   const recipientCount = recipientState.recipients.length;
   const missingSettings: string[] = [];
 
@@ -840,6 +892,7 @@ async function getSmsConfigDiagnostics(env: Env): Promise<SmsConfigDiagnostics> 
     recipientCount,
     configuredFishTextRecipientCount: recipientState.configuredFishTextRecipientCount,
     quietHoursBlockedRecipientCount: recipientState.quietHoursBlockedRecipientCount,
+    completedTodayBlockedRecipientCount: recipientState.completedTodayBlockedRecipientCount,
     recipientTimeZone: recipientState.timeZone,
     recipientLocalTime: recipientState.localTime,
     missingSettings,
@@ -863,6 +916,18 @@ class SmsQuietHoursError extends Error {
     super(message);
     this.name = "SmsQuietHoursError";
     this.diagnostics = diagnostics;
+  }
+}
+
+class SmsRecipientFilterError extends Error {
+  readonly diagnostics: SmsDiagnosticContext;
+  readonly reason: "completed_today";
+
+  constructor(message: string, diagnostics: SmsDiagnosticContext, reason: "completed_today") {
+    super(message);
+    this.name = "SmsRecipientFilterError";
+    this.diagnostics = diagnostics;
+    this.reason = reason;
   }
 }
 
@@ -890,8 +955,8 @@ class TwilioSmsError extends Error {
   }
 }
 
-async function sendTwilioSms(env: Env, message: string): Promise<SmsProviderResult[]> {
-  const configDiagnostics = await getSmsConfigDiagnostics(env);
+async function sendTwilioSms(env: Env, message: string, recipientOptions: SmsRecipientOptions = {}): Promise<SmsProviderResult[]> {
+  const configDiagnostics = await getSmsConfigDiagnostics(env, recipientOptions);
   const baseDiagnostics: SmsDiagnosticContext = { sms: configDiagnostics };
   const accountSid = env.TWILIO_ACCOUNT_SID?.trim();
   const authToken = env.TWILIO_AUTH_TOKEN?.trim();
@@ -900,7 +965,7 @@ async function sendTwilioSms(env: Env, message: string): Promise<SmsProviderResu
   const authUsername = apiKeySid && apiKeySecret ? apiKeySid : accountSid;
   const authPassword = apiKeySid && apiKeySecret ? apiKeySecret : authToken;
   const fromPhoneNumber = env.ALERTING_FROM_PHONE_NUMBER?.trim();
-  const recipientState = await getSmsRecipientState(env);
+  const recipientState = await getSmsRecipientState(env, recipientOptions);
   const recipients = recipientState.recipients;
 
   if (!configDiagnostics.smsEnabled) {
@@ -913,6 +978,10 @@ async function sendTwilioSms(env: Env, message: string): Promise<SmsProviderResu
   }
 
   if (recipients.length === 0) {
+    if (recipientState.completedTodayBlockedRecipientCount > 0) {
+      throw new SmsRecipientFilterError("No fish text recipients still need to do a chore today.", baseDiagnostics, "completed_today");
+    }
+
     throw new SmsQuietHoursError("No fish text recipients are currently inside their allowed text window.", baseDiagnostics);
   }
 
@@ -972,7 +1041,7 @@ async function sendTwilioSms(env: Env, message: string): Promise<SmsProviderResu
 function smsFailureDetails(error: unknown): SmsFailureDetails {
   const fallbackMessage = error instanceof Error ? error.message : "Unknown SMS error.";
 
-  if (error instanceof SmsConfigurationError || error instanceof SmsQuietHoursError) {
+  if (error instanceof SmsConfigurationError || error instanceof SmsQuietHoursError || error instanceof SmsRecipientFilterError) {
     return {
       errorMessage: fallbackMessage,
       providerStatus: null,
@@ -1072,9 +1141,12 @@ async function sendFishNotification(
   const lastSentMessage = await getLastSentNotification(env.DB);
   const selectionMode: FishMessageSelectionMode = env.FISH_MESSAGE_MODE === "escalation" ? "escalation" : "random";
   const message = chooseFishMessage(type, mood, hungerScore, lastSentMessage?.message_body ?? null, selectionMode);
+  const recipientOptions: SmsRecipientOptions = {
+    onlyMembersWithoutChoresToday: shouldTextOnlyMembersWithoutChoresToday(type, mood),
+  };
 
   try {
-    const results = await sendTwilioSms(env, message);
+    const results = await sendTwilioSms(env, message, recipientOptions);
 
     for (const result of results) {
       await recordFishNotification(
@@ -1090,7 +1162,7 @@ async function sendFishNotification(
         {
           providerStatus: result.providerStatus,
           diagnosticContext: {
-            sms: await getSmsConfigDiagnostics(env),
+            sms: await getSmsConfigDiagnostics(env, recipientOptions),
             provider: {
               recipient: result.recipient,
               twilioStatus: result.providerStatus,
@@ -1110,6 +1182,22 @@ async function sendFishNotification(
         sent: false,
         skipped: true,
         reason: "quiet_hours",
+        type,
+        mood,
+        hungerScore,
+        message,
+        diagnostics: error.diagnostics,
+      };
+    }
+
+    if (error instanceof SmsRecipientFilterError) {
+      await recordFishNotification(env.DB, type, mood, hungerScore, message, null, null, "skipped", error.reason, {
+        diagnosticContext: error.diagnostics,
+      });
+      return {
+        sent: false,
+        skipped: true,
+        reason: error.reason,
         type,
         mood,
         hungerScore,
@@ -1236,9 +1324,12 @@ async function sendCurrentAquariumModeNotification(env: Env): Promise<CurrentMod
 
   const lastSentMessage = await getLastSentNotification(env.DB);
   const message = chooseCurrentAquariumModeMessage(aquariumMood, lastSentMessage?.message_body ?? null);
+  const recipientOptions: SmsRecipientOptions = {
+    onlyMembersWithoutChoresToday: shouldTextOnlyMembersWithoutChoresToday("test", mood),
+  };
 
   try {
-    const results = await sendTwilioSms(env, message);
+    const results = await sendTwilioSms(env, message, recipientOptions);
 
     for (const result of results) {
       await recordFishNotification(
@@ -1254,7 +1345,7 @@ async function sendCurrentAquariumModeNotification(env: Env): Promise<CurrentMod
         {
           providerStatus: result.providerStatus,
           diagnosticContext: {
-            sms: await getSmsConfigDiagnostics(env),
+            sms: await getSmsConfigDiagnostics(env, recipientOptions),
             provider: {
               recipient: result.recipient,
               twilioStatus: result.providerStatus,
@@ -1283,6 +1374,23 @@ async function sendCurrentAquariumModeNotification(env: Env): Promise<CurrentMod
         sent: false,
         skipped: true,
         reason: "quiet_hours",
+        type: "test",
+        mood,
+        hungerScore: 0,
+        message,
+        aquariumMood,
+        diagnostics: error.diagnostics,
+      };
+    }
+
+    if (error instanceof SmsRecipientFilterError) {
+      await recordFishNotification(env.DB, "test", mood, 0, message, null, null, "skipped", error.reason, {
+        diagnosticContext: error.diagnostics,
+      });
+      return {
+        sent: false,
+        skipped: true,
+        reason: error.reason,
         type: "test",
         mood,
         hungerScore: 0,
