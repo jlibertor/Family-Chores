@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
 
 const apiBaseUrl = 'https://family-chores-api.jlibertor.workers.dev'
-const requiredWorkerSecrets = ['PARENT_PIN', 'TWILIO_ACCOUNT_SID']
+const requiredWorkerSecrets = ['PARENT_PIN']
 
 function run(command, options = {}) {
   const result = spawnSync(command, {
@@ -66,7 +66,10 @@ function verifyWorkerSecrets() {
 
 verifyWorkerSecrets()
 
-run('npm run deploy:worker')
+// TWILIO_ACCOUNT_SID is configured as a dashboard-managed Worker variable.
+// Preserve dashboard bindings so deploys do not drop it while still keeping
+// secret values out of the repository.
+run('npx wrangler deploy --config worker/wrangler.toml --keep-vars')
 
 run('npm --workspace frontend run build', {
   env: {
