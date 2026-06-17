@@ -24,6 +24,25 @@ Set the parent setup PIN as a Worker secret:
 npx wrangler secret put PARENT_PIN --config worker/wrangler.toml
 ```
 
+Set the Twilio account SID as a Worker secret:
+
+```bash
+npx wrangler secret put TWILIO_ACCOUNT_SID --config worker/wrangler.toml
+```
+
+Set the Twilio auth token as a Worker secret so aquarium text notifications can send:
+
+```bash
+npx wrangler secret put TWILIO_AUTH_TOKEN --config worker/wrangler.toml
+```
+
+Alternatively, create a Standard Twilio API Key and set both values as Worker secrets. When these are present, the Worker uses them instead of `TWILIO_AUTH_TOKEN`:
+
+```bash
+npx wrangler secret put TWILIO_API_KEY_SID --config worker/wrangler.toml
+npx wrangler secret put TWILIO_API_KEY_SECRET --config worker/wrangler.toml
+```
+
 ## Current Free Production URLs
 
 - Frontend: <https://family-chores-cta.pages.dev>

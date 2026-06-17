@@ -370,6 +370,11 @@ function App() {
   const [successBugId, setSuccessBugId] = useState<string | null>(null)
   const [adminPin, setAdminPin] = useState('')
   const [adminUnlocked, setAdminUnlocked] = useState(false)
+  const [panicPinEntry, setPanicPinEntry] = useState('')
+  const [panicModalOpen, setPanicModalOpen] = useState(false)
+  const [panicError, setPanicError] = useState('')
+  const [panicSubmitting, setPanicSubmitting] = useState(false)
+  const [textModeSubmitting, setTextModeSubmitting] = useState(false)
   const [adminMembers, setAdminMembers] = useState<Member[]>([])
   const [adminChores, setAdminChores] = useState<Chore[]>([])
   const [adminNotes, setAdminNotes] = useState<HouseholdNote[]>([])
@@ -874,6 +879,41 @@ function App() {
     }
   }
 
+  async function submitPanic(pin: string, isActive: boolean) {
+    setPanicError('')
+    setPanicSubmitting(true)
+    try {
+      await api('/api/admin/aquarium-panic', {
+        method: isActive ? 'DELETE' : 'POST',
+        headers: { 'X-Parent-Pin': pin },
+      })
+      setPanicModalOpen(false)
+      setPanicPinEntry('')
+      await refreshHousehold()
+    } catch {
+      setPanicError('Wrong PIN or something went wrong.')
+    } finally {
+      setPanicSubmitting(false)
+    }
+  }
+
+  async function textCurrentAquariumMode() {
+    setError('')
+    setSuccessMessage('')
+    setTextModeSubmitting(true)
+
+    try {
+      const data = await api<{ ok: boolean; result: { sent: boolean; skipped: boolean } }>('/api/fish-notifications/current-mode', {
+        method: 'POST',
+      })
+      setSuccessMessage(data.result.skipped ? 'Fish text was just sent.' : 'Fish text sent.')
+    } catch (currentError) {
+      setError(currentError instanceof Error ? currentError.message : 'Could not send fish text.')
+    } finally {
+      setTextModeSubmitting(false)
+    }
+  }
+
   async function exportHouseholdData() {
     setError('')
 
@@ -949,6 +989,9 @@ function App() {
           aquarium={aquarium}
           onRecord={() => navigate('/choose-mode')}
           onFriends={() => navigate('/aquarium-friends')}
+          onPanic={() => { setPanicPinEntry(''); setPanicError(''); setPanicModalOpen(true) }}
+          onTextMode={() => void textCurrentAquariumMode()}
+          textModeSubmitting={textModeSubmitting}
         />
       )}
 
@@ -1164,6 +1207,43 @@ function App() {
             <p className="empty-state">Log in as an adult to open setup.</p>
           </div>
         </section>
+      )}
+
+      {panicModalOpen && (
+        <div className="modal-overlay" onClick={() => setPanicModalOpen(false)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+            <h2>{aquarium?.state.panic_mode ? 'Clear panic mode' : '🚨 Panic mode'}</h2>
+            <p>
+              {aquarium?.state.panic_mode
+                ? 'Enter your parent PIN to cancel panic mode early.'
+                : 'Chores weren\'t done right. Enter your parent PIN to make the fish sad until 3 real chores are completed.'}
+            </p>
+            <input
+              type="password"
+              inputMode="numeric"
+              placeholder="Parent PIN"
+              value={panicPinEntry}
+              className="pin-input"
+              autoFocus
+              onChange={(e) => { setPanicPinEntry(e.target.value); setPanicError('') }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && panicPinEntry) void submitPanic(panicPinEntry, !!aquarium?.state.panic_mode) }}
+            />
+            {panicError && <p className="notice error">{panicError}</p>}
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="primary-action"
+                disabled={!panicPinEntry || panicSubmitting}
+                onClick={() => void submitPanic(panicPinEntry, !!aquarium?.state.panic_mode)}
+              >
+                {panicSubmitting ? 'Saving…' : aquarium?.state.panic_mode ? 'Clear panic' : 'Activate panic'}
+              </button>
+              <button type="button" className="secondary-action" onClick={() => setPanicModalOpen(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </main>
   )

@@ -8,5 +8,21 @@ database_name = "family-chores"
 database_id = "db94d0ac-60c4-4c90-a9cf-b39c40da6b02"
 migrations_dir = "../database/migrations"
 
+[triggers]
+crons = ["0 * * * *"]
+
+[vars]
+SMS_ENABLED = "true"
+SMS_TEST_MODE = "true"
+SMS_TEST_NUMBER = "+13105035221"
+ALERTING_FROM_PHONE_NUMBER = "+13105934267"
+
 # Configure the real parent PIN as a Cloudflare secret:
 # wrangler secret put PARENT_PIN
+# Configure Twilio credentials as Cloudflare secrets:
+# wrangler secret put TWILIO_ACCOUNT_SID
+# wrangler secret put TWILIO_AUTH_TOKEN
+#
+# Keep SMS_TEST_MODE=true during development. When production rollout is ready,
+# set SMS_TEST_MODE=false and configure ALERTING_TO_PHONE_NUMBERS as a
+# comma-separated list or switch to per-child recipients.

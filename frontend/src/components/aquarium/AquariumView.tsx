@@ -27,7 +27,7 @@ export type AquariumEgg = {
 
 export type AquariumEvent = {
   id: number
-  event_type: 'fed' | 'hatched'
+  event_type: 'fed' | 'hatched' | 'mood_reset'
   message: string
   member_name: string | null
   completion_id: number | null
@@ -39,6 +39,7 @@ export type AquariumLeaderboardRow = {
   member_id: number
   member_name: string
   member_avatar_id: string | null
+  member_type: string
   completed_count: number
 }
 
@@ -64,6 +65,9 @@ export type AquariumData = {
     mood_message: string
     last_fed_at: string | null
     hours_since_fed: number
+    panic_mode: number
+    panic_chores_needed: number
+    panic_expires_at: string | null
   }
   creatures: AquariumCreature[]
   eggs: AquariumEgg[]
@@ -125,14 +129,14 @@ const cryAudioSources = [
   '/sounds/bugs/bug-mourn-cry-4.mp3',
 ]
 
-// Quiet, periodic pleas when the tank is ignored. Sadder moods cry more
+// Periodic pleas when the tank is ignored. Sadder moods cry more
 // often and a little louder, but never alarm-level on the kitchen tablet.
 const cryBehavior: Record<AquariumMood, { minMs: number; maxMs: number; volume: number } | null> = {
   happy: null,
   content: null,
-  hungry: { minMs: 180_000, maxMs: 320_000, volume: 0.18 },
-  very_hungry: { minMs: 90_000, maxMs: 170_000, volume: 0.3 },
-  sad: { minMs: 45_000, maxMs: 95_000, volume: 0.42 },
+  hungry: { minMs: 60_000, maxMs: 120_000, volume: 0.22 },
+  very_hungry: { minMs: 25_000, maxMs: 55_000, volume: 0.35 },
+  sad: { minMs: 12_000, maxMs: 28_000, volume: 0.5 },
 }
 
 function playCry(volume: number) {
@@ -252,10 +256,16 @@ export function AquariumView({
   aquarium,
   onRecord,
   onFriends,
+  onPanic,
+  onTextMode,
+  textModeSubmitting,
 }: {
   aquarium: AquariumData | null
   onRecord: () => void
   onFriends: () => void
+  onPanic: () => void
+  onTextMode: () => void
+  textModeSubmitting: boolean
 }) {
   const [leaderboardRange, setLeaderboardRange] = useState<AquariumLeaderboardRange>('today')
 
@@ -273,7 +283,7 @@ export function AquariumView({
   const foodPercent = formatPercent(aquarium.state.food_reserve, aquarium.state.max_food_reserve)
   const leaderboard = aquarium.leaderboard[leaderboardRange] ?? []
   const pendingEggs = aquarium.eggs ?? []
-  const yesterdayRows = aquarium.leaderboard.yesterday ?? []
+  const yesterdayRows = (aquarium.leaderboard.yesterday ?? []).filter((row) => row.member_type === 'child')
   const yesterdayCompletions = aquarium.yesterdayCompletions ?? []
   const yesterdayTotal = yesterdayRows.reduce((sum, row) => sum + row.completed_count, 0)
   const yesterdaySlackers = yesterdayRows.filter((row) => row.completed_count === 0)
@@ -432,6 +442,12 @@ export function AquariumView({
         </button>
         <button type="button" className="secondary-action aquarium-record-action" onClick={onFriends}>
           Aquarium friends
+        </button>
+        <button type="button" className="danger-action aquarium-record-action" onClick={onPanic}>
+          {aquarium.state.panic_mode ? `🚨 Panic active — ${aquarium.state.panic_chores_needed} chore${aquarium.state.panic_chores_needed === 1 ? '' : 's'} to go` : '🚨 Panic mode'}
+        </button>
+        <button type="button" className="secondary-action aquarium-text-action" onClick={onTextMode} disabled={textModeSubmitting}>
+          {textModeSubmitting ? 'texting' : 'text'}
         </button>
       </aside>
     </section>
@@ -631,6 +647,31 @@ function AquariumScene({
       bubbleTimeoutsRef.current.push(foodTimeout)
     }
 
+    const latestResetEvent = newEvents.find((event) => event.event_type === 'mood_reset')
+    if (latestResetEvent) {
+      setFeedNotice('The fish are happy again! 🎉')
+      playFeedChime()
+      const noticeTimeout = window.setTimeout(() => setFeedNotice(''), 4200)
+      bubbleTimeoutsRef.current.push(noticeTimeout)
+
+      const celebrationHearts = Array.from({ length: 16 }, (_, index) => ({
+        id: latestResetEvent.id * 10_000 + index + 50_000,
+        x: randomBetween(size.width * 0.08, size.width * 0.92),
+        y: randomBetween(size.height * 0.18, size.height * 0.82),
+        size: randomBetween(18, 38),
+        delayMs: index * 110,
+      }))
+      setHearts((current) => [...current, ...celebrationHearts].slice(-24))
+      const heartsTimeout = window.setTimeout(() => {
+        setHearts((current) => current.filter((heart) => !celebrationHearts.some((ch) => ch.id === heart.id)))
+      }, 4500)
+      bubbleTimeoutsRef.current.push(heartsTimeout)
+
+      for (const swimmer of swimmersRef.current.values()) {
+        swimmer.moodBoostUntil = performance.now() + 6000
+      }
+    }
+
     setBursts((current) => [...current, ...newBursts].slice(-36))
     const timeoutId = window.setTimeout(() => {
       setBursts((current) => current.filter((burst) => !newBursts.some((newBurst) => newBurst.id === burst.id)))
@@ -688,7 +729,14 @@ function AquariumScene({
             swimmer.targetY = next.y
             swimmer.facing = next.x >= swimmer.x ? 1 : -1
             swimmer.speed = randomBetween(0.018, 0.042)
-            swimmer.pauseUntil = time + randomBetween(mood === 'sad' ? 520 : 120, mood === 'happy' ? 700 : 1500)
+            if (creature.species_id === 'crab') {
+              // Crabs settle in and hang out, lingering much longer when
+              // they've reached one of the algae clusters at the edges.
+              const nearAlgae = swimmer.x < size.width * 0.2 || swimmer.x > size.width * 0.8
+              swimmer.pauseUntil = time + (nearAlgae ? randomBetween(3200, 6000) : randomBetween(900, 2000))
+            } else {
+              swimmer.pauseUntil = time + randomBetween(mood === 'sad' ? 520 : 120, mood === 'happy' ? 700 : 1500)
+            }
           } else {
             const boost = time < swimmer.moodBoostUntil ? 1.8 : 1
             const step = swimmer.speed * moodSpeed[mood] * boost * delta
@@ -858,10 +906,24 @@ function AquariumScene({
 
 function pickCreatureTarget(creature: AquariumCreature, width: number, height: number, spriteSize: number) {
   if (creature.species_id === 'crab') {
-    return {
-      x: randomBetween(spriteSize * 0.7, Math.max(spriteSize, width - spriteSize * 0.7)),
-      y: randomBetween(height * 0.76, height * 0.86),
+    // The crab walks along the sandy floor and likes to amble over to the
+    // algae/seaweed on the left (~5%) and right (~6%) edges to hang out.
+    const minX = spriteSize * 0.7
+    const maxX = Math.max(minX, width - spriteSize * 0.7)
+    const clampX = (value: number) => Math.min(Math.max(value, minX), maxX)
+    const floorY = randomBetween(height * 0.8, height * 0.86)
+    const roll = Math.random()
+
+    if (roll < 0.45) {
+      // Left algae cluster.
+      return { x: clampX(width * 0.1 + randomBetween(-spriteSize * 0.15, spriteSize * 0.35)), y: floorY }
     }
+    if (roll < 0.9) {
+      // Right algae cluster.
+      return { x: clampX(width * 0.9 + randomBetween(-spriteSize * 0.35, spriteSize * 0.15)), y: floorY }
+    }
+    // Occasionally wander the open floor between the plants.
+    return { x: randomBetween(minX, maxX), y: floorY }
   }
 
   if (creature.species_id === 'seahorse') {

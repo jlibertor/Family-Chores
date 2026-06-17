@@ -146,6 +146,9 @@ vite.config.ts.timestamp-*
 .wrangler/
 .dev.vars
 
+# Production data exports
+database/prod-backup-*.sql
+
 # Build output by workspace
 frontend/dist/
 worker/dist/
