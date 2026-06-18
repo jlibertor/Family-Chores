@@ -390,6 +390,7 @@ function App() {
   const [panicError, setPanicError] = useState('')
   const [panicSubmitting, setPanicSubmitting] = useState(false)
   const [textModeSubmitting, setTextModeSubmitting] = useState(false)
+  const [localFishTextActiveUntil, setLocalFishTextActiveUntil] = useState<string | null>(null)
   const [adminMembers, setAdminMembers] = useState<Member[]>([])
   const [adminChores, setAdminChores] = useState<Chore[]>([])
   const [adminNotes, setAdminNotes] = useState<HouseholdNote[]>([])
@@ -964,6 +965,10 @@ function App() {
       const data = await api<{ ok: boolean; result: { sent: boolean; skipped: boolean; reason?: string } }>('/api/fish-notifications/current-mode', {
         method: 'POST',
       })
+      if (data.result.sent) {
+        setLocalFishTextActiveUntil(new Date(Date.now() + 60_000).toISOString())
+      }
+      await refreshHousehold(true)
       setSuccessMessage(data.result.reason === 'quiet_hours' ? 'Fish text skipped outside the text window.' : data.result.skipped ? 'Fish text was just sent.' : 'Fish text sent.')
     } catch (currentError) {
       setError(currentError instanceof Error ? currentError.message : 'Could not send fish text.')
@@ -1043,6 +1048,7 @@ function App() {
       {route === '/aquarium' && (
         <AquariumView
           aquarium={aquarium}
+          fishTextActiveUntil={getActiveFishTextUntil(localFishTextActiveUntil, aquarium?.state.fish_text_active_until ?? null)}
           onRecord={() => navigate('/choose-mode')}
           onFriends={() => navigate('/aquarium-friends')}
           onPanic={() => { setPanicPinEntry(''); setPanicError(''); setPanicModalOpen(true) }}
@@ -2635,6 +2641,15 @@ function toAquariumConfigDraft(config: AquariumConfigDraft): AquariumConfigDraft
     egg_incubation_minutes: Number(config.egg_incubation_minutes ?? defaultAquariumConfigDraft.egg_incubation_minutes),
     growth_days: Number(config.growth_days ?? defaultAquariumConfigDraft.growth_days),
   }
+}
+
+function parseUtcLikeTimestamp(value: string) {
+  return Date.parse(value.includes('T') ? value : `${value.replace(' ', 'T')}Z`)
+}
+
+function getActiveFishTextUntil(localUntil: string | null, apiUntil: string | null) {
+  if (localUntil && parseUtcLikeTimestamp(localUntil) > Date.now()) return localUntil
+  return apiUntil
 }
 
 function noteTypeLabel(type: NoteType) {

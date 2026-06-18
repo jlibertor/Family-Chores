@@ -548,6 +548,150 @@ button:focus-visible {
   height: 100%;
 }
 
+.aquarium-phone-bubble {
+  position: absolute;
+  top: 17%;
+  left: 13%;
+  z-index: 6;
+  width: clamp(58px, 7vw, 92px);
+  height: clamp(58px, 7vw, 92px);
+  pointer-events: none;
+  transform-origin: center;
+  animation: aquarium-phone-drift 24s ease-in-out infinite;
+  filter: drop-shadow(0 13px 13px rgb(15 23 42 / 0.18));
+}
+
+.aquarium-phone-bubble.texting {
+  top: 0;
+  left: 0;
+  z-index: 7;
+  animation: none;
+  filter:
+    drop-shadow(0 14px 14px rgb(15 23 42 / 0.2))
+    drop-shadow(0 0 14px rgb(34 197 94 / 0.42));
+}
+
+.aquarium-phone-bubble.texting::before,
+.aquarium-phone-bubble.texting::after {
+  position: absolute;
+  inset: 6%;
+  border: 2px solid rgb(255 255 255 / 0.5);
+  border-radius: 999px;
+  content: "";
+  pointer-events: none;
+  animation: aquarium-phone-ring 1.15s ease-out infinite;
+}
+
+.aquarium-phone-bubble.texting::after {
+  animation-delay: 0.56s;
+}
+
+.aquarium-phone-bubble svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.aquarium-fish-hook {
+  position: absolute;
+  top: -2px;
+  left: 0;
+  z-index: 6;
+  width: 44px;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 280ms ease;
+  will-change: height, transform;
+}
+
+.aquarium-fish-hook.lowered {
+  opacity: 1;
+}
+
+.fish-hook-line {
+  position: absolute;
+  top: 0;
+  left: 23px;
+  width: 2px;
+  height: calc(100% - 44px);
+  min-height: 0;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgb(226 232 240 / 0.78), rgb(100 116 139 / 0.88));
+  box-shadow: 0 0 8px rgb(255 255 255 / 0.36);
+}
+
+.fish-hook-art {
+  position: absolute;
+  right: -3px;
+  bottom: -1px;
+  width: 52px;
+  height: 62px;
+  overflow: visible;
+  filter: drop-shadow(0 3px 4px rgb(15 23 42 / 0.18));
+}
+
+.fish-hook-shank,
+.fish-hook-bend,
+.fish-hook-point,
+.fish-hook-barb {
+  fill: none;
+  stroke: #1f2937;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 5.4;
+}
+
+.fish-hook-point,
+.fish-hook-barb {
+  stroke-width: 4.6;
+}
+
+.fish-hook-eye {
+  fill: #e2e8f0;
+  stroke: #1f2937;
+  stroke-width: 3.5;
+}
+
+.fish-hook-glint {
+  fill: #f8fafc;
+  opacity: 0.88;
+}
+
+.phone-bubble-shell {
+  fill: rgb(255 255 255 / 0.18);
+  stroke: rgb(255 255 255 / 0.72);
+  stroke-width: 3;
+}
+
+.phone-bubble-shine {
+  fill: rgb(255 255 255 / 0.46);
+}
+
+.phone-body {
+  fill: #0f172a;
+  stroke: #020617;
+  stroke-width: 2;
+}
+
+.phone-screen {
+  fill: #bfdbfe;
+}
+
+.message-app-tile {
+  fill: #22c55e;
+}
+
+.message-app-bubble {
+  fill: white;
+}
+
+.phone-speaker,
+.phone-home {
+  fill: #e2e8f0;
+}
+
 .creature-eyes {
   transform-box: fill-box;
   transform-origin: center;
@@ -727,27 +871,6 @@ button:focus-visible {
 .aquarium-helper-row.skipped span {
   background: #fee2e2;
   color: #b91c1c;
-}
-
-.aquarium-yesterday-card.all-skipped {
-  border-color: #fca5a5;
-  background: rgb(254 242 242 / 0.92);
-}
-
-.aquarium-yesterday-warning {
-  border-left: 4px solid #ef4444;
-  border-radius: 0 8px 8px 0;
-  background: #fef2f2;
-  color: #b91c1c;
-  padding: 8px 10px;
-  font-weight: 800;
-}
-
-.aquarium-yesterday-detail {
-  color: #64748b;
-  font-size: 0.86rem;
-  font-weight: 700;
-  line-height: 1.45;
 }
 
 .aquarium-heart {
@@ -932,6 +1055,44 @@ button:focus-visible {
   100% {
     opacity: 0;
     transform: translate(-50%, -8px);
+  }
+}
+
+@keyframes aquarium-phone-drift {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(-9deg);
+  }
+
+  18% {
+    transform: translate3d(38vw, 8vh, 0) rotate(7deg);
+  }
+
+  38% {
+    transform: translate3d(62vw, 37vh, 0) rotate(-5deg);
+  }
+
+  57% {
+    transform: translate3d(27vw, 46vh, 0) rotate(10deg);
+  }
+
+  78% {
+    transform: translate3d(7vw, 24vh, 0) rotate(-3deg);
+  }
+
+  100% {
+    transform: translate3d(0, 0, 0) rotate(-9deg);
+  }
+}
+
+@keyframes aquarium-phone-ring {
+  0% {
+    opacity: 0.6;
+    transform: scale(0.72);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1.28);
   }
 }
 
@@ -1506,6 +1667,7 @@ button:focus-visible {
   .aquarium-random-bubble,
   .aquarium-food-particle,
   .aquarium-feed-notice,
+  .aquarium-phone-bubble,
   .creature-eyes,
   .aquarium-creature-crab svg,
   .aquarium-egg {

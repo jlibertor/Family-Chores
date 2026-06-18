@@ -68,6 +68,7 @@ export type AquariumData = {
     panic_mode: number
     panic_chores_needed: number
     panic_expires_at: string | null
+    fish_text_active_until: string | null
   }
   creatures: AquariumCreature[]
   eggs: AquariumEgg[]
@@ -217,6 +218,11 @@ const moodSpeed: Record<AquariumMood, number> = {
   sad: 0.28,
 }
 
+const fishHookCycleMs = 40_000
+const fishHookLowerMs = 3_600
+const fishHookHoldMs = 20_000
+const fishHookRetractMs = 3_400
+
 function randomBetween(min: number, max: number) {
   return min + Math.random() * (max - min)
 }
@@ -259,8 +265,10 @@ export function AquariumView({
   onPanic,
   onTextMode,
   textModeSubmitting,
+  fishTextActiveUntil,
 }: {
   aquarium: AquariumData | null
+  fishTextActiveUntil: string | null
   onRecord: () => void
   onFriends: () => void
   onPanic: () => void
@@ -283,10 +291,6 @@ export function AquariumView({
   const foodPercent = formatPercent(aquarium.state.food_reserve, aquarium.state.max_food_reserve)
   const leaderboard = aquarium.leaderboard[leaderboardRange] ?? []
   const pendingEggs = aquarium.eggs ?? []
-  const yesterdayRows = (aquarium.leaderboard.yesterday ?? []).filter((row) => row.member_type === 'child')
-  const yesterdayCompletions = aquarium.yesterdayCompletions ?? []
-  const yesterdayTotal = yesterdayRows.reduce((sum, row) => sum + row.completed_count, 0)
-  const yesterdaySlackers = yesterdayRows.filter((row) => row.completed_count === 0)
   const milestoneRemainder = aquarium.state.total_chore_completions % aquarium.state.creature_unlock_interval
   const nextMilestoneRemaining =
     milestoneRemainder === 0
@@ -301,6 +305,7 @@ export function AquariumView({
           eggs={pendingEggs}
           mood={aquarium.state.mood}
           events={aquarium.events}
+          fishTextActiveUntil={fishTextActiveUntil}
         />
 
         <div className="aquarium-status-strip" aria-live="polite">
@@ -346,35 +351,6 @@ export function AquariumView({
             . Uses {aquarium.state.daily_food_consumption} food each day. Next friend in {nextMilestoneRemaining}{' '}
             chore{nextMilestoneRemaining === 1 ? '' : 's'}.
           </p>
-        </section>
-
-        <section className={`aquarium-yesterday-card${yesterdayTotal === 0 ? ' all-skipped' : ''}`}>
-          <div className="aquarium-card-heading">
-            <h2>Yesterday</h2>
-            <strong>{yesterdayTotal === 0 ? 'Fish went hungry' : `${yesterdayTotal} chore${yesterdayTotal === 1 ? '' : 's'}`}</strong>
-          </div>
-          {yesterdayTotal === 0 ? (
-            <p className="aquarium-yesterday-warning">Nobody fed the fish yesterday. They cried all night.</p>
-          ) : (
-            <div className="aquarium-helper-list">
-              {yesterdayRows.map((row) => (
-                <span key={row.member_id} className={`aquarium-helper-row${row.completed_count === 0 ? ' skipped' : ''}`}>
-                  <strong>{row.member_name}</strong>
-                  <span>{row.completed_count === 0 ? 'no chores' : row.completed_count}</span>
-                </span>
-              ))}
-            </div>
-          )}
-          {yesterdayTotal > 0 && yesterdaySlackers.length > 0 && (
-            <p className="aquarium-yesterday-warning">
-              {yesterdaySlackers.map((row) => row.member_name).join(', ')} did nothing yesterday.
-            </p>
-          )}
-          {yesterdayCompletions.length > 0 && (
-            <p className="aquarium-yesterday-detail">
-              {yesterdayCompletions.map((item) => `${item.member_name}: ${item.chore_name}`).join(' · ')}
-            </p>
-          )}
         </section>
 
         {pendingEggs.length > 0 && (
@@ -516,18 +492,23 @@ function AquariumScene({
   eggs,
   mood,
   events,
+  fishTextActiveUntil,
 }: {
   creatures: AquariumCreature[]
   eggs: AquariumEgg[]
   mood: AquariumMood
   events: AquariumEvent[]
+  fishTextActiveUntil: string | null
 }) {
   const tankRef = useRef<HTMLDivElement | null>(null)
+  const phoneRef = useRef<HTMLDivElement | null>(null)
+  const hookRef = useRef<HTMLDivElement | null>(null)
   const spriteRefs = useRef(new Map<number, HTMLDivElement>())
   const swimmersRef = useRef(new Map<number, Swimmer>())
   const frameRef = useRef<number | null>(null)
   const lastTimeRef = useRef(0)
   const latestEventIdRef = useRef<number | null>(null)
+  const fishTextActiveUntilRef = useRef<number | null>(null)
   const bubbleTimeoutsRef = useRef<number[]>([])
   const [size, setSize] = useState({ width: 0, height: 0 })
   const [bursts, setBursts] = useState<BubbleBurst[]>([])
@@ -543,6 +524,10 @@ function AquariumScene({
     window.addEventListener('pointerdown', unlock, { passive: true })
     return () => window.removeEventListener('pointerdown', unlock)
   }, [])
+
+  useEffect(() => {
+    fishTextActiveUntilRef.current = fishTextActiveUntil ? parseUtcLikeTimestamp(fishTextActiveUntil) : null
+  }, [fishTextActiveUntil])
 
   // Periodic soft cries while the tank is hungry or sad.
   useEffect(() => {
@@ -712,13 +697,79 @@ function AquariumScene({
       const delta = Math.min(time - lastTime, 48)
       lastTimeRef.current = time
 
-      for (const creature of creatures) {
+      const phone = phoneRef.current
+      const phoneUntilMs = fishTextActiveUntilRef.current
+      const fishTextActive = phoneUntilMs !== null && Date.now() < phoneUntilMs
+      const phoneSize = getPhoneBubbleSize(size.width)
+      const phonePosition = fishTextActive
+        ? getPhoneTextPosition(size.width, size.height, phoneSize, phoneUntilMs, time)
+        : null
+      const hookPosition = getFishHookPosition(size.width, size.height, time)
+      const hook = hookRef.current
+
+      if (phone && phonePosition) {
+        const jitterX = Math.sin(time / 22) * 3.2
+        const jitterRotation = Math.sin(time / 18) * 5
+        phone.classList.add('texting')
+        phone.style.width = `${phoneSize}px`
+        phone.style.height = `${phoneSize}px`
+        phone.style.transform = `translate3d(${phonePosition.x - phoneSize / 2 + jitterX}px, ${phonePosition.y - phoneSize / 2}px, 0) rotate(${jitterRotation}deg)`
+      } else if (phone) {
+        phone.classList.remove('texting')
+        phone.style.removeProperty('width')
+        phone.style.removeProperty('height')
+        phone.style.removeProperty('transform')
+      }
+
+      if (hook && hookPosition.visible) {
+        hook.classList.add('lowered')
+        hook.style.height = `${Math.max(0, hookPosition.y)}px`
+        hook.style.transform = `translate3d(${hookPosition.x - 22}px, 0, 0)`
+      } else if (hook) {
+        hook.classList.remove('lowered')
+        hook.style.removeProperty('height')
+        hook.style.removeProperty('transform')
+      }
+
+      for (const [index, creature] of creatures.entries()) {
         const swimmer = swimmersRef.current.get(creature.id)
         const sprite = spriteRefs.current.get(creature.id)
         if (!swimmer || !sprite) continue
 
         const spriteSize = getCreatureSize(creature, size.width)
-        if (time >= swimmer.pauseUntil) {
+        if (phonePosition) {
+          const huddle = getPhoneHuddleTarget(phonePosition, index, creatures.length, spriteSize, phoneSize, time)
+          swimmer.targetX = Math.min(Math.max(huddle.x, spriteSize * 0.55), size.width - spriteSize * 0.55)
+          swimmer.targetY = Math.min(Math.max(huddle.y, spriteSize * 0.62), size.height - spriteSize * 0.9)
+          swimmer.pauseUntil = 0
+
+          const dx = swimmer.targetX - swimmer.x
+          const dy = swimmer.targetY - swimmer.y
+          const distance = Math.hypot(dx, dy)
+          if (distance > 1) {
+            const step = Math.min(distance, Math.max(0.088, swimmer.speed * 3.1) * delta)
+            swimmer.x += (dx / distance) * step
+            swimmer.y += (dy / distance) * step
+            swimmer.facing = dx >= 0 ? 1 : -1
+          }
+          swimmer.moodBoostUntil = time + 240
+        } else if (hookPosition.visible && hookPosition.attraction > 0) {
+          const huddle = getFishHookCuriousTarget(hookPosition, index, creatures.length, spriteSize, time)
+          swimmer.targetX = Math.min(Math.max(huddle.x, spriteSize * 0.55), size.width - spriteSize * 0.55)
+          swimmer.targetY = Math.min(Math.max(huddle.y, spriteSize * 0.62), size.height - spriteSize * 0.9)
+          swimmer.pauseUntil = 0
+
+          const dx = swimmer.targetX - swimmer.x
+          const dy = swimmer.targetY - swimmer.y
+          const distance = Math.hypot(dx, dy)
+          if (distance > 1) {
+            const step = Math.min(distance, Math.max(0.062, swimmer.speed * 2.35) * delta * hookPosition.attraction)
+            swimmer.x += (dx / distance) * step
+            swimmer.y += (dy / distance) * step
+            swimmer.facing = dx >= 0 ? 1 : -1
+          }
+          swimmer.moodBoostUntil = time + 160
+        } else if (time >= swimmer.pauseUntil) {
           const dx = swimmer.targetX - swimmer.x
           const dy = swimmer.targetY - swimmer.y
           const distance = Math.hypot(dx, dy)
@@ -813,8 +864,25 @@ function AquariumScene({
       <div className="seaweed seaweed-two"><span /><span /><span /></div>
       <div className="bubble-stream stream-one"><span /><span /><span /><span /></div>
       <div className="bubble-stream stream-two"><span /><span /><span /></div>
+      <div ref={hookRef} className="aquarium-fish-hook" aria-hidden="true">
+        <span className="fish-hook-line" />
+        <svg className="fish-hook-art" viewBox="0 0 48 58" aria-hidden="true">
+          <path className="fish-hook-shank" d="M30 4 C28 13 25 23 21 32" />
+          <path className="fish-hook-bend" d="M21 32 C15 45 26 55 38 48 C47 43 44 30 33 31" />
+          <path className="fish-hook-point" d="M33 31 L42 22" />
+          <path className="fish-hook-barb" d="M33 31 L24 29" />
+          <circle className="fish-hook-eye" cx="30" cy="4" r="3.6" />
+          <circle className="fish-hook-glint" cx="39" cy="43" r="2.8" />
+        </svg>
+      </div>
 
       {feedNotice && <div className="aquarium-feed-notice">{feedNotice}</div>}
+
+      <AquariumPhoneBubble
+        nodeRef={(node) => {
+          phoneRef.current = node
+        }}
+      />
 
       {creatures.map((creature) => (
         <div
@@ -934,6 +1002,93 @@ function pickCreatureTarget(creature: AquariumCreature, width: number, height: n
   return pickTarget(width, height, spriteSize)
 }
 
+function parseUtcLikeTimestamp(value: string) {
+  return Date.parse(value.includes('T') ? value : `${value.replace(' ', 'T')}Z`)
+}
+
+function getPhoneBubbleSize(tankWidth: number) {
+  return Math.round(Math.min(Math.max(tankWidth * 0.09, 58), 96))
+}
+
+function getPhoneTextPosition(width: number, height: number, phoneSize: number, activeUntilMs: number, time: number) {
+  const remainingMs = Math.max(0, activeUntilMs - Date.now())
+  const progress = Math.max(0, Math.min(1, 1 - remainingMs / 60_000))
+  const drift = progress * Math.PI * 2
+  const left = phoneSize * 1.05
+  const right = Math.max(left, width - phoneSize * 1.05)
+  const top = phoneSize * 1.05
+  const bottom = Math.max(top, height * 0.68)
+  const x = width * (0.5 + Math.sin(drift) * 0.22 + Math.sin(drift * 2.4) * 0.06)
+  const y = height * (0.38 + Math.cos(drift + 0.7) * 0.12 + Math.sin(time / 1900) * 0.025)
+
+  return {
+    x: Math.min(Math.max(x, left), right),
+    y: Math.min(Math.max(y, top), bottom),
+  }
+}
+
+function getPhoneHuddleTarget(
+  phonePosition: { x: number; y: number },
+  index: number,
+  creatureCount: number,
+  spriteSize: number,
+  phoneSize: number,
+  time: number,
+) {
+  const angle = time / 1650 + index * ((Math.PI * 2) / Math.max(1, creatureCount))
+  const radius = Math.max(spriteSize * 0.58, phoneSize * 0.72) + (index % 2) * 12
+
+  return {
+    x: phonePosition.x + Math.cos(angle) * radius + Math.sin(time / 740 + index) * 7,
+    y: phonePosition.y + Math.sin(angle) * radius * 0.7 + Math.cos(time / 820 + index) * 6,
+  }
+}
+
+function smoothStep(value: number) {
+  return value * value * (3 - 2 * value)
+}
+
+function getFishHookPosition(width: number, height: number, time: number) {
+  const phase = time % fishHookCycleMs
+  const activeMs = fishHookLowerMs + fishHookHoldMs + fishHookRetractMs
+  if (phase >= activeMs) {
+    return { visible: false, x: 0, y: 0, attraction: 0 }
+  }
+
+  const targetY = height * 0.6
+  const x = width * 0.58 + Math.sin(time / 2600) * Math.min(34, width * 0.04)
+  let progress = 1
+
+  if (phase < fishHookLowerMs) {
+    progress = smoothStep(phase / fishHookLowerMs)
+  } else if (phase > fishHookLowerMs + fishHookHoldMs) {
+    progress = 1 - smoothStep((phase - fishHookLowerMs - fishHookHoldMs) / fishHookRetractMs)
+  }
+
+  return {
+    visible: true,
+    x,
+    y: targetY * progress,
+    attraction: Math.min(1, progress * 1.35),
+  }
+}
+
+function getFishHookCuriousTarget(
+  hookPosition: { x: number; y: number },
+  index: number,
+  creatureCount: number,
+  spriteSize: number,
+  time: number,
+) {
+  const angle = time / 1700 + index * ((Math.PI * 2) / Math.max(1, creatureCount))
+  const radius = spriteSize * (0.74 + (index % 3) * 0.12)
+
+  return {
+    x: hookPosition.x + Math.cos(angle) * radius + Math.sin(time / 810 + index) * 8,
+    y: hookPosition.y + spriteSize * 0.42 + Math.sin(angle) * radius * 0.48 + Math.cos(time / 920 + index) * 7,
+  }
+}
+
 function CreatureArt({ speciesId, mood }: { speciesId: string; mood: AquariumMood }) {
   if (speciesId === 'angelfish') return <Angelfish mood={mood} />
   if (speciesId === 'seahorse') return <Seahorse mood={mood} />
@@ -941,6 +1096,23 @@ function CreatureArt({ speciesId, mood }: { speciesId: string; mood: AquariumMoo
   if (speciesId === 'pufferfish') return <Pufferfish mood={mood} />
   if (speciesId === 'starfish') return <Starfish mood={mood} />
   return <Clownfish mood={mood} />
+}
+
+function AquariumPhoneBubble({ nodeRef }: { nodeRef: (node: HTMLDivElement | null) => void }) {
+  return (
+    <div ref={nodeRef} className="aquarium-phone-bubble" role="img" aria-label="A phone floating in a bubble">
+      <svg viewBox="0 0 104 104" aria-hidden="true">
+        <circle className="phone-bubble-shell" cx="52" cy="52" r="46" />
+        <circle className="phone-bubble-shine" cx="36" cy="30" r="12" />
+        <rect className="phone-body" x="34" y="19" width="36" height="66" rx="9" />
+        <rect className="phone-screen" x="38" y="25" width="28" height="51" rx="5" />
+        <rect className="message-app-tile" x="43" y="34" width="18" height="18" rx="5" />
+        <path className="message-app-bubble" d="M48 42 C48 39 51 37 54 37 C58 37 61 39 61 42 C61 45 58 47 54 47 L50 50 L51 47 C49 46 48 44 48 42 Z" />
+        <circle className="phone-speaker" cx="52" cy="22" r="1.8" />
+        <circle className="phone-home" cx="52" cy="80" r="2.5" />
+      </svg>
+    </div>
+  )
 }
 
 function Face({ mood, x = 64, y = 50 }: { mood: AquariumMood; x?: number; y?: number }) {

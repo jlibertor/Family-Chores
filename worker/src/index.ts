@@ -478,6 +478,10 @@ type CurrentModeNotificationResult = FishNotificationResult & {
   aquariumMood: AquariumMood;
 };
 
+type FishTextActiveRow = {
+  active_until: string;
+};
+
 function parseDbTimestampMs(value: string) {
   return Date.parse(`${value.replace(" ", "T")}Z`);
 }
@@ -1293,6 +1297,22 @@ async function getCurrentAquariumMood(db: D1Database) {
   return getAquariumMood(state, todayChildCount);
 }
 
+async function getFishTextActiveUntil(db: D1Database) {
+  const row = await db
+    .prepare(
+      `SELECT datetime(created_at, '+60 seconds') AS active_until
+       FROM fish_notification_history
+       WHERE status = 'sent'
+        AND message_body IS NOT NULL
+        AND datetime(created_at) >= datetime('now', '-60 seconds')
+       ORDER BY datetime(created_at) DESC, id DESC
+       LIMIT 1`,
+    )
+    .first<FishTextActiveRow>();
+
+  return row?.active_until ?? null;
+}
+
 async function sendCurrentAquariumModeNotification(env: Env): Promise<CurrentModeNotificationResult> {
   const aquariumMood = await getCurrentAquariumMood(env.DB);
   const mood = fishHungerMoodForAquariumMood(aquariumMood);
@@ -1568,7 +1588,17 @@ async function listAquarium(db: D1Database) {
   const state = await getAquariumState(db);
   const calendar = getHouseholdCalendar();
 
-  const [creatures, eggs, events, todayLeaderboard, yesterdayLeaderboard, allTimeLeaderboard, yesterdayCompletions, todayChildCount] = await Promise.all([
+  const [
+    creatures,
+    eggs,
+    events,
+    todayLeaderboard,
+    yesterdayLeaderboard,
+    allTimeLeaderboard,
+    yesterdayCompletions,
+    todayChildCount,
+    fishTextActiveUntil,
+  ] = await Promise.all([
     db
       .prepare(
         `SELECT id, species_id, growth_stage, created_at, updated_at
@@ -1664,6 +1694,7 @@ async function listAquarium(db: D1Database) {
       .bind(calendar.yesterdayStart, calendar.yesterdayEnd)
       .all(),
     countTodayChildAquariumCompletions(db, calendar),
+    getFishTextActiveUntil(db),
   ]);
 
   const mood = getAquariumMood(state, todayChildCount);
@@ -1678,6 +1709,7 @@ async function listAquarium(db: D1Database) {
         panic_mode: state.panic_mode,
         panic_chores_needed: state.panic_chores_needed,
         hours_since_fed: Math.round(hoursSinceAquariumFed(state)),
+        fish_text_active_until: fishTextActiveUntil,
       },
       creatures: creatures.results,
       eggs: eggs.results,
