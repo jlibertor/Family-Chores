@@ -1,7 +1,7 @@
 -- Aquarium polish phase: configurable egg lifecycle and tuning values.
 
 ALTER TABLE aquarium_state ADD COLUMN starting_food_reserve INTEGER NOT NULL DEFAULT 14 CHECK (starting_food_reserve >= 0);
-ALTER TABLE aquarium_state ADD COLUMN egg_incubation_minutes INTEGER NOT NULL DEFAULT 60 CHECK (egg_incubation_minutes >= 0);
+ALTER TABLE aquarium_state ADD COLUMN egg_incubation_minutes INTEGER NOT NULL DEFAULT 4320 CHECK (egg_incubation_minutes >= 0);
 
 CREATE TABLE IF NOT EXISTS aquarium_eggs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

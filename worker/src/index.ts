@@ -17,9 +17,9 @@ type SessionMode = "member" | "kiosk" | "admin";
 type MemberType = "adult" | "child";
 type FrequencyType = "daily" | "weekdays" | "weekends" | "weekly" | "monthly" | "as_needed";
 type AssignmentMode = "household_anyone" | "assigned_individual" | "per_person";
-type AquariumMood = "happy" | "content" | "hungry" | "very_hungry" | "sad";
+type AquariumMood = "happy" | "content" | "peckish" | "hungry" | "very_hungry" | "sad";
 type FishHungerMood = "happy" | "slightly_hungry" | "hungry" | "very_hungry" | "emergency_hunger";
-type FishNotificationType = "hunger" | "new_fish" | "fish_birthday" | "fish_growth" | "tank_success" | "test";
+type FishNotificationType = "hunger" | "new_fish" | "fish_birthday" | "fish_growth" | "tank_success" | "test" | "fish_reward_thank_you";
 type FishMessageSelectionMode = "random" | "escalation";
 
 const corsHeaders = {
@@ -90,6 +90,59 @@ const requireParentPin = (request: Request, env: Env) => {
   return request.headers.get("X-Parent-Pin") === expectedPin;
 };
 
+type AppSettings = {
+  test_mode: 0 | 1;
+};
+
+const defaultAppSettings: AppSettings = {
+  test_mode: 0,
+};
+
+async function getAppSettings(db: D1Database): Promise<AppSettings> {
+  try {
+    const { results } = await db
+      .prepare("SELECT key, value FROM app_settings WHERE key = 'test_mode'")
+      .all<{ key: string; value: string }>();
+    const values = new Map(results.map((row) => [row.key, row.value]));
+    const testModeValue = values.get("test_mode");
+
+    return {
+      test_mode: testModeValue === "1" || testModeValue?.toLowerCase() === "true" ? 1 : 0,
+    };
+  } catch (error) {
+    console.warn("Could not load app settings", error);
+    return defaultAppSettings;
+  }
+}
+
+async function isTestModeEnabled(env: Env) {
+  if (envFlag(env.SMS_TEST_MODE, false)) return true;
+  const settings = await getAppSettings(env.DB);
+  return settings.test_mode === 1;
+}
+
+async function listAppSettings(db: D1Database) {
+  return json({ ok: true, settings: await getAppSettings(db) });
+}
+
+async function saveAppSettings(request: Request, db: D1Database) {
+  const body = await readJson(request);
+  const testMode = asActiveFlag(body.test_mode, defaultAppSettings.test_mode);
+
+  await db
+    .prepare(
+      `INSERT INTO app_settings (key, value, updated_at)
+       VALUES ('test_mode', ?, datetime('now'))
+       ON CONFLICT(key) DO UPDATE SET
+         value = excluded.value,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(String(testMode))
+    .run();
+
+  return json({ ok: true, settings: await getAppSettings(db) });
+}
+
 const avatarIds = new Set([
   "boston-terrier",
   "black-cat",
@@ -136,13 +189,11 @@ const bugIds = [
   "tiny-horn-bug",
 ];
 
-const aquariumSpeciesIds = ["clownfish", "angelfish", "seahorse", "crab", "pufferfish", "starfish"];
+const aquariumSpeciesIds = ["clownfish", "seahorse", "angelfish", "crab", "pufferfish", "starfish", "clam"];
 
 const publicMemberNameSql = (alias: string) => `COALESCE(NULLIF(TRIM(${alias}.nickname), ''), ${alias}.display_name)`;
 
 const chooseRandomBugId = () => bugIds[crypto.getRandomValues(new Uint32Array(1))[0] % bugIds.length];
-const chooseRandomAquariumSpeciesId = () =>
-  aquariumSpeciesIds[crypto.getRandomValues(new Uint32Array(1))[0] % aquariumSpeciesIds.length];
 const randomInteger = (maxExclusive: number) => crypto.getRandomValues(new Uint32Array(1))[0] % maxExclusive;
 const randomPercent = () => randomInteger(10_000) / 100;
 
@@ -154,6 +205,7 @@ const envFlag = (value: string | undefined, fallback: boolean) => {
 const householdTimeZone = "America/Los_Angeles";
 const defaultFishTextStartTime = "09:00";
 const defaultFishTextStopTime = "23:00";
+const defaultEggIncubationMinutes = 3 * 24 * 60;
 
 type HouseholdCalendar = {
   todayDate: string;
@@ -310,6 +362,7 @@ type AquariumStateRow = {
   panic_mode: number;
   panic_chores_needed: number;
   panic_expires_at: string | null;
+  everything_good_until: string | null;
 };
 
 const fishEmojiPools = {
@@ -325,6 +378,13 @@ const fishEmojiPools = {
   rare_humorous: ["🐟🚪🍤❓", "🐠📅😳", "🐟🔍🍤", "🐠☎️🍤", "🐟🛸🍤"],
 } as const;
 
+const rewardMessageTemplates = {
+  tier1: ["🐟🙏🫧", "🐠✨🙏", "🐡💋🫧", "🐟🙏💖", "🐠🫧✨"],
+  tier2: ["🐟🐠🙏✨🫧", "🐡🐟💋✨", "🐠💖🙏🫧", "🐟✨🐠✨🙏", "🐡🫧💖💋"],
+  tier3: ["🐟🐠🐡✨✨🙏💋", "🐠🐟💖🫧✨😘", "🐡🐟🐠🎉🙏✨", "🐟💋🐠💋🐡✨", "🐠🫧✨💖🙏🌊"],
+  tier4: ["🐟🐠🐡🎉✨💖💋🙏🫧", "🐠🐟🐡✨✨✨😘🌈", "🐟🐟🐠🐡🎉🫧💖🙏", "🐡🐠🐟💋💋✨🌊🎉", "🐟🐠🐡🥰✨🫧🌈🙏"],
+} as const;
+
 const fishEscalationSequence = ["🐟👀", "🐟⏰", "🐟🍽️", "🐟🥺🍤", "🐟😭🍤", "🐟⚠️🍽️", "🐟💀🍽️"] as const;
 
 const hungerCooldownHours: Record<Exclude<FishHungerMood, "happy">, number> = {
@@ -337,10 +397,35 @@ const hungerCooldownHours: Record<Exclude<FishHungerMood, "happy">, number> = {
 // With no chores today, the tank can stay stable briefly after yesterday's work,
 // but it should never report "happy" until today's chores actually start.
 const aquariumMoodHours = {
-  content: 20,
+  peckish: 20,
   hungry: 32,
   very_hungry: 44,
 } as const;
+
+const aquariumMoodRank: Record<AquariumMood, number> = {
+  sad: 0,
+  very_hungry: 1,
+  hungry: 2,
+  peckish: 3,
+  content: 4,
+  happy: 5,
+};
+
+type AquariumParticipation = {
+  todayChildCount: number;
+  todayDistinctChildCount: number;
+  activeChildCount: number;
+};
+
+type AquariumMoodDebugCompletion = {
+  id: number;
+  member_id: number;
+  member_name: string;
+  member_type: MemberType;
+  chore_name: string;
+  feeds_aquarium: number;
+  completed_at: string;
+};
 
 function hoursSinceAquariumFed(state: AquariumStateRow): number {
   if (!state.last_fed_at) return 999;
@@ -349,34 +434,125 @@ function hoursSinceAquariumFed(state: AquariumStateRow): number {
   return Math.max(0, (Date.now() - fedMs) / 3_600_000);
 }
 
-// Fish happiness is driven by how many child chores were completed today.
-// One morning routine (brushing teeth) is not enough — we need real effort.
-// 3+ chores = happy, 2 = content, 1 = hungry, 0 = time-based decay from yesterday,
-// but never happy.
-// Panic mode overrides everything and locks the tank to "sad" until enough chores are done.
-function getAquariumMood(state: AquariumStateRow, todayChildCount: number): AquariumMood {
-  if (state.panic_mode === 1) return "sad";
+function worseAquariumMood(a: AquariumMood, b: AquariumMood): AquariumMood {
+  return aquariumMoodRank[a] <= aquariumMoodRank[b] ? a : b;
+}
 
+function getParticipationCeilingMood(distinctChildCount: number, activeChildCount: number): AquariumMood | null {
+  if (distinctChildCount <= 0 || activeChildCount <= 0) return null;
+  if (distinctChildCount >= activeChildCount) return "happy";
+  if (distinctChildCount >= activeChildCount - 1) return "content";
+  if (distinctChildCount >= Math.ceil(activeChildCount / 2)) return "peckish";
+  return "hungry";
+}
+
+function getBaseAquariumMood(state: AquariumStateRow, todayChildCount: number): AquariumMood {
   if (todayChildCount >= 3) return "happy";
   if (todayChildCount === 2) return "content";
   if (todayChildCount === 1) return "hungry";
 
   // No chores yet today — decay from last feeding time.
   const hours = hoursSinceAquariumFed(state);
-  if (hours <= aquariumMoodHours.content) return "content";
+  if (hours <= aquariumMoodHours.peckish) return "peckish";
   if (hours <= aquariumMoodHours.hungry) return "hungry";
   if (hours <= aquariumMoodHours.very_hungry) return "very_hungry";
   return "sad";
 }
 
+// Fish happiness is driven by how many child chores were completed today.
+// One morning routine (brushing teeth) is not enough — we need real effort.
+// 3+ chores = happy, 2 = content, 1 = hungry, 0 = time-based decay from yesterday.
+// Distinct child participation caps that base mood so one child cannot carry the tank.
+// Panic mode overrides everything and locks the tank to "sad" until enough chores are done.
+function getAquariumMood(state: AquariumStateRow, participation: AquariumParticipation): AquariumMood {
+  if (state.everything_good_until && Date.parse(`${state.everything_good_until.replace(" ", "T")}Z`) > Date.now()) {
+    return "happy";
+  }
+
+  if (state.panic_mode === 1) return "sad";
+
+  const baseMood = getBaseAquariumMood(state, participation.todayChildCount);
+  const participationCeilingMood = getParticipationCeilingMood(
+    participation.todayDistinctChildCount,
+    participation.activeChildCount,
+  );
+
+  return participationCeilingMood ? worseAquariumMood(baseMood, participationCeilingMood) : baseMood;
+}
+
+function getAquariumMoodDebug(
+  state: AquariumStateRow,
+  participation: AquariumParticipation,
+  calendar: HouseholdCalendar,
+  todayCompletions: AquariumMoodDebugCompletion[],
+) {
+  const nowMs = Date.now();
+  const everythingGoodActive = Boolean(
+    state.everything_good_until && Date.parse(`${state.everything_good_until.replace(" ", "T")}Z`) > nowMs,
+  );
+  const panicActive = state.panic_mode === 1;
+  const baseMood = getBaseAquariumMood(state, participation.todayChildCount);
+  const participationCeilingMood = getParticipationCeilingMood(
+    participation.todayDistinctChildCount,
+    participation.activeChildCount,
+  );
+  const uncappedMood = baseMood;
+  const finalMood = getAquariumMood(state, participation);
+  const countedCompletions = todayCompletions.filter(
+    (completion) => completion.member_type === "child" && completion.feeds_aquarium === 1,
+  );
+  const ignoredCompletions = todayCompletions.filter(
+    (completion) => completion.member_type !== "child" || completion.feeds_aquarium !== 1,
+  );
+
+  return {
+    generated_at: utcTimestamp(new Date(nowMs)),
+    time_zone: householdTimeZone,
+    today: {
+      date: calendar.todayDate,
+      start: calendar.todayStart,
+      end: calendar.todayEnd,
+    },
+    mood: {
+      final: finalMood,
+      base: baseMood,
+      uncapped: uncappedMood,
+      participation_ceiling: participationCeilingMood,
+    },
+    participation,
+    counted_completions: countedCompletions,
+    ignored_completions: ignoredCompletions,
+    rules: {
+      chore_count: [
+        { min: 3, mood: "happy" },
+        { count: 2, mood: "content" },
+        { count: 1, mood: "hungry" },
+        { count: 0, mood: "time_decay" },
+      ],
+      time_decay_hours: aquariumMoodHours,
+      mood_rank: aquariumMoodRank,
+      participation_cap_enabled: true,
+    },
+    overrides: {
+      everything_good_active: everythingGoodActive,
+      everything_good_until: state.everything_good_until,
+      panic_active: panicActive,
+      panic_chores_needed: state.panic_chores_needed,
+      panic_expires_at: state.panic_expires_at,
+    },
+    last_fed_at: state.last_fed_at,
+    hours_since_fed: Math.round(hoursSinceAquariumFed(state)),
+  };
+}
+
 function getAquariumMoodMessage(mood: AquariumMood, todayChildCount: number) {
-  if (mood === "happy") return `${todayChildCount} chores done today. The aquarium is thriving!`;
-  if (todayChildCount === 2) return "Two chores done today. One more and the fish will be happy!";
-  if (todayChildCount === 1) return "One chore done today. The fish need more help.";
-  if (mood === "content") return "No chores done today yet. The fish need today's chores to be happy.";
-  if (mood === "hungry") return "No chores done today. The fish are getting hungry.";
-  if (mood === "very_hungry") return "No chores done today. The fish are crying.";
-  return "The fish are heartbroken. They have been ignored for too long.";
+  if (mood === "happy") return "The fish are well fed today.";
+  if (mood === "content") return "The fish are doing okay today.";
+  if (mood === "peckish") return "The fish could use a little more help today.";
+  if (todayChildCount === 1) return "Only 1 chore completed today.";
+  if (mood === "very_hungry") return "No chores completed today!";
+  if (mood === "sad") return "No chores completed today!";
+  return "No chores completed today.";
 }
 
 type FishNotificationHistoryRow = {
@@ -454,6 +630,13 @@ type SmsFailureDetails = {
 };
 
 type FishNotificationRecordOptions = {
+  recipientMemberId?: number | null;
+  choreDate?: string | null;
+  completedChoresToday?: number | null;
+  fishMoodAtSendTime?: AquariumMood | null;
+  chorePoints?: number | null;
+  fishMoodModifier?: number | null;
+  finalRewardScore?: number | null;
   errorMessage?: string | null;
   providerStatus?: string | null;
   providerStatusCode?: number | null;
@@ -478,12 +661,72 @@ type CurrentModeNotificationResult = FishNotificationResult & {
   aquariumMood: AquariumMood;
 };
 
+type ScheduledHungerNotificationResult = FishNotificationResult & {
+  aquariumMood: AquariumMood;
+  calculation: HungerCalculation;
+  individualAccountability: IndividualHungerAccountabilityResult[];
+};
+
 type FishTextActiveRow = {
   active_until: string;
 };
 
+type HouseholdDayWindow = {
+  date: string;
+  start: string;
+  end: string;
+};
+
+type IndividualZeroChoreRow = {
+  member_id: number;
+  member_name: string;
+  day_0_count: number;
+  day_1_count: number;
+  day_2_count: number;
+  day_3_count: number;
+};
+
+type IndividualHungerAccountabilityResult = FishNotificationResult & {
+  memberId: number;
+  memberName: string;
+  zeroChoreStreak: number;
+};
+
+type RewardTier = keyof typeof rewardMessageTemplates;
+
+type ChildRewardCandidate = {
+  member_id: number;
+  member_name: string;
+  completed_chores_today: number;
+};
+
+type FishRewardThankYouResult = FishNotificationResult & {
+  memberId: number;
+  memberName: string;
+  choreDate: string;
+  completedChoresToday: number;
+  aquariumMood: AquariumMood;
+  chorePoints: number;
+  fishMoodModifier: number;
+  finalRewardScore: number;
+  tier: RewardTier;
+};
+
+type ScheduledRewardNotificationResult = {
+  ran: boolean;
+  skipped: boolean;
+  reason: string;
+  choreDate: string;
+  aquariumMood: AquariumMood | null;
+  results: FishRewardThankYouResult[];
+};
+
 function parseDbTimestampMs(value: string) {
   return Date.parse(`${value.replace(" ", "T")}Z`);
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function getFishHungerMood(score: number): FishHungerMood {
@@ -492,6 +735,75 @@ function getFishHungerMood(score: number): FishHungerMood {
   if (score >= 5) return "hungry";
   if (score >= 3) return "slightly_hungry";
   return "happy";
+}
+
+function fishHungerMoodIsHungryOrWorse(mood: FishHungerMood) {
+  return mood === "hungry" || mood === "very_hungry" || mood === "emergency_hunger";
+}
+
+function individualHungerMessageForZeroChoreStreak(streak: number) {
+  if (streak === 2) return "🐟😐🍽️❓";
+  if (streak === 3) return "🐟😟🍽️‼️";
+  return "🐟💀🍽️🚨";
+}
+
+function getChorePoints(completedChoresToday: number) {
+  if (completedChoresToday <= 0) return 0;
+  return Math.min(completedChoresToday, 3);
+}
+
+function getFishMoodModifier(fishMood: AquariumMood) {
+  if (fishMood === "happy") return 1;
+  if (fishMood === "hungry" || fishMood === "very_hungry" || fishMood === "sad") return -1;
+  return 0;
+}
+
+function getFinalRewardScore(completedChoresToday: number, fishMood: AquariumMood) {
+  const chorePoints = getChorePoints(completedChoresToday);
+  if (chorePoints === 0) return 0;
+  return clamp(chorePoints + getFishMoodModifier(fishMood), 1, 4);
+}
+
+function rewardTierForScore(score: number): RewardTier {
+  if (score >= 4) return "tier4";
+  if (score === 3) return "tier3";
+  if (score === 2) return "tier2";
+  return "tier1";
+}
+
+function chooseRewardMessage(tier: RewardTier, lastMessage: string | null) {
+  return chooseEmojiFromPool(rewardMessageTemplates[tier], lastMessage);
+}
+
+function isInsideRewardSendWindow(now = new Date()) {
+  const minutes = timeOfDayMinutes(localTimeOfDay(now));
+  return minutes >= 20 * 60 && minutes < 21 * 60;
+}
+
+function getHouseholdDayWindows(count: number, now = new Date()): HouseholdDayWindow[] {
+  const today = localDateParts(now);
+
+  return Array.from({ length: count }, (_, index) => {
+    const day = addLocalDays(today, -index);
+    const nextDay = addLocalDays(day, 1);
+    return {
+      date: `${day.year}-${String(day.month).padStart(2, "0")}-${String(day.day).padStart(2, "0")}`,
+      start: utcTimestamp(localMidnightUtc(day.year, day.month, day.day)),
+      end: utcTimestamp(localMidnightUtc(nextDay.year, nextDay.month, nextDay.day)),
+    };
+  });
+}
+
+function zeroChoreStreakFromCounts(row: IndividualZeroChoreRow) {
+  const counts = [row.day_0_count, row.day_1_count, row.day_2_count, row.day_3_count];
+  let streak = 0;
+
+  for (const count of counts) {
+    if (count > 0) break;
+    streak += 1;
+  }
+
+  return streak;
 }
 
 function periodForFrequency(frequency: FrequencyType, calendar: HouseholdCalendar) {
@@ -670,10 +982,19 @@ function chooseFishMessage(
 }
 
 function fishHungerMoodForAquariumMood(mood: AquariumMood): FishHungerMood {
+  if (mood === "peckish") return "slightly_hungry";
   if (mood === "hungry") return "hungry";
   if (mood === "very_hungry") return "very_hungry";
   if (mood === "sad") return "emergency_hunger";
   return "happy";
+}
+
+function hungerScoreForAquariumMood(mood: AquariumMood) {
+  if (mood === "peckish") return 3;
+  if (mood === "hungry") return 5;
+  if (mood === "very_hungry") return 8;
+  if (mood === "sad") return 11;
+  return 0;
 }
 
 function chooseCurrentAquariumModeMessage(mood: AquariumMood, lastMessage: string | null) {
@@ -736,6 +1057,8 @@ type SmsRecipientState = {
 
 type SmsRecipientOptions = {
   onlyMembersWithoutChoresToday?: boolean;
+  onlyAdults?: boolean;
+  targetMemberIds?: number[];
 };
 
 async function getMembersWithCompletionsToday(db: D1Database) {
@@ -754,7 +1077,7 @@ async function getMembersWithCompletionsToday(db: D1Database) {
 }
 
 async function getSmsRecipientState(env: Env, options: SmsRecipientOptions = {}): Promise<SmsRecipientState> {
-  const testMode = envFlag(env.SMS_TEST_MODE, true);
+  const testMode = await isTestModeEnabled(env);
   const testNumber = env.SMS_TEST_NUMBER?.trim() || "+13105035221";
   const localTime = localTimeOfDay();
 
@@ -769,16 +1092,21 @@ async function getSmsRecipientState(env: Env, options: SmsRecipientOptions = {})
     };
   }
 
+  const targetMemberIds = options.targetMemberIds?.filter((id) => Number.isInteger(id) && id > 0) ?? [];
+  const targetMemberFilter = targetMemberIds.length > 0 ? `AND id IN (${targetMemberIds.map(() => "?").join(", ")})` : "";
   const { results } = await env.DB
     .prepare(
       `SELECT id, phone_number, fish_text_start_time, fish_text_stop_time
        FROM family_members
        WHERE active = 1
+        AND (? = 0 OR member_type = 'adult')
+        ${targetMemberFilter}
         AND receives_fish_texts = 1
         AND phone_number IS NOT NULL
         AND TRIM(phone_number) <> ''
        ORDER BY sort_order, display_name`,
     )
+    .bind(options.onlyAdults ? 1 : 0, ...targetMemberIds)
     .all<{ id: number; phone_number: string; fish_text_start_time: string | null; fish_text_stop_time: string | null }>();
   const configuredRecipients = new Set<string>();
   const eligibleRecipients = new Set<string>();
@@ -819,7 +1147,7 @@ async function getSmsRecipientState(env: Env, options: SmsRecipientOptions = {})
     };
   }
 
-  if (options.onlyMembersWithoutChoresToday) {
+  if (options.onlyMembersWithoutChoresToday || options.onlyAdults) {
     return {
       recipients: [],
       configuredFishTextRecipientCount: 0,
@@ -857,7 +1185,7 @@ function stringValue(value: unknown) {
 
 async function getSmsConfigDiagnostics(env: Env, options: SmsRecipientOptions = {}): Promise<SmsConfigDiagnostics> {
   const smsEnabled = envFlag(env.SMS_ENABLED, true);
-  const testMode = envFlag(env.SMS_TEST_MODE, true);
+  const testMode = await isTestModeEnabled(env);
   const hasAccountSid = Boolean(env.TWILIO_ACCOUNT_SID?.trim());
   const hasAuthToken = Boolean(env.TWILIO_AUTH_TOKEN?.trim());
   const hasApiKeySid = Boolean(env.TWILIO_API_KEY_SID?.trim());
@@ -1104,15 +1432,17 @@ async function recordFishNotification(
   await db
     .prepare(
       `INSERT INTO fish_notification_history
-        (notification_type, mood, hunger_score, message_body, recipient_phone_number, provider_message_id, status, reason, error_message,
-         provider_status, provider_status_code, provider_error_code, provider_error_message, diagnostic_context)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (notification_type, mood, hunger_score, message_body, recipient_member_id, recipient_phone_number, provider_message_id, status, reason, error_message,
+         provider_status, provider_status_code, provider_error_code, provider_error_message, diagnostic_context, chore_date, completed_chores_today,
+         fish_mood_at_send_time, chore_points, fish_mood_modifier, final_reward_score)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       type,
       mood,
       hungerScore,
       message,
+      options.recipientMemberId ?? null,
       recipient,
       providerMessageId,
       status,
@@ -1123,6 +1453,12 @@ async function recordFishNotification(
       options.providerErrorCode ?? null,
       options.providerErrorMessage ?? null,
       diagnosticContext,
+      options.choreDate ?? null,
+      options.completedChoresToday ?? null,
+      options.fishMoodAtSendTime ?? null,
+      options.chorePoints ?? null,
+      options.fishMoodModifier ?? null,
+      options.finalRewardScore ?? null,
     )
     .run();
 }
@@ -1146,7 +1482,8 @@ async function sendFishNotification(
   const selectionMode: FishMessageSelectionMode = env.FISH_MESSAGE_MODE === "escalation" ? "escalation" : "random";
   const message = chooseFishMessage(type, mood, hungerScore, lastSentMessage?.message_body ?? null, selectionMode);
   const recipientOptions: SmsRecipientOptions = {
-    onlyMembersWithoutChoresToday: shouldTextOnlyMembersWithoutChoresToday(type, mood),
+    onlyMembersWithoutChoresToday: type === "test" ? false : shouldTextOnlyMembersWithoutChoresToday(type, mood),
+    onlyAdults: type === "test",
   };
 
   try {
@@ -1233,68 +1570,507 @@ async function sendFishNotification(
   }
 }
 
-async function runFishHungerNotification(env: Env, reason = "scheduled"): Promise<FishNotificationResult & { calculation: HungerCalculation }> {
-  const calculation = await calculateHungerScore(env.DB);
+async function getIndividualZeroChoreStreaks(db: D1Database, now = new Date()) {
+  const days = getHouseholdDayWindows(4, now);
+  const { results } = await db
+    .prepare(
+      `SELECT
+        fm.id AS member_id,
+        ${publicMemberNameSql("fm")} AS member_name,
+        SUM(CASE WHEN cc.completed_at >= ? AND cc.completed_at < ? THEN 1 ELSE 0 END) AS day_0_count,
+        SUM(CASE WHEN cc.completed_at >= ? AND cc.completed_at < ? THEN 1 ELSE 0 END) AS day_1_count,
+        SUM(CASE WHEN cc.completed_at >= ? AND cc.completed_at < ? THEN 1 ELSE 0 END) AS day_2_count,
+        SUM(CASE WHEN cc.completed_at >= ? AND cc.completed_at < ? THEN 1 ELSE 0 END) AS day_3_count
+       FROM family_members fm
+       LEFT JOIN chore_completions cc
+        ON cc.completed_by_member_id = fm.id
+        AND cc.completed_at >= ?
+        AND cc.completed_at < ?
+       WHERE fm.active = 1
+        AND fm.member_type = 'child'
+       GROUP BY fm.id
+       ORDER BY fm.sort_order, member_name`,
+    )
+    .bind(
+      days[0].start,
+      days[0].end,
+      days[1].start,
+      days[1].end,
+      days[2].start,
+      days[2].end,
+      days[3].start,
+      days[3].end,
+      days[3].start,
+      days[0].end,
+    )
+    .all<IndividualZeroChoreRow>();
 
-  if (calculation.allAssignedChoresComplete) {
-    const result = await sendFishNotification(env, "tank_success", "all_assigned_chores_complete", calculation.score, "happy");
-    return { ...result, calculation };
+  return results.map((row) => ({
+    memberId: row.member_id,
+    memberName: row.member_name,
+    zeroChoreStreak: zeroChoreStreakFromCounts(row),
+  }));
+}
+
+async function alreadySentIndividualHungerTextToday(db: D1Database, memberId: number, now = new Date()) {
+  const [today] = getHouseholdDayWindows(1, now);
+  const row = await db
+    .prepare(
+      `SELECT id
+       FROM fish_notification_history
+       WHERE notification_type = 'hunger'
+        AND reason = 'individual_hunger_accountability'
+        AND recipient_member_id = ?
+        AND status = 'sent'
+        AND created_at >= ?
+        AND created_at < ?
+       LIMIT 1`,
+    )
+    .bind(memberId, today.start, today.end)
+    .first<{ id: number }>();
+
+  return row !== null;
+}
+
+async function sendIndividualHungerAccountabilityText(
+  env: Env,
+  memberId: number,
+  memberName: string,
+  zeroChoreStreak: number,
+  hungerScore: number,
+  mood: FishHungerMood,
+): Promise<IndividualHungerAccountabilityResult> {
+  const message = individualHungerMessageForZeroChoreStreak(zeroChoreStreak);
+  const recipientOptions: SmsRecipientOptions = { targetMemberIds: [memberId] };
+
+  try {
+    const results = await sendTwilioSms(env, message, recipientOptions);
+
+    for (const result of results) {
+      await recordFishNotification(
+        env.DB,
+        "hunger",
+        mood,
+        hungerScore,
+        message,
+        result.recipient,
+        result.providerMessageId,
+        "sent",
+        "individual_hunger_accountability",
+        {
+          recipientMemberId: memberId,
+          providerStatus: result.providerStatus,
+          diagnosticContext: {
+            sms: await getSmsConfigDiagnostics(env, recipientOptions),
+            provider: {
+              recipient: result.recipient,
+              twilioStatus: result.providerStatus,
+            },
+          },
+        },
+      );
+    }
+
+    return { sent: true, skipped: false, reason: "individual_hunger_accountability", type: "hunger", mood, hungerScore, message, memberId, memberName, zeroChoreStreak };
+  } catch (error) {
+    if (error instanceof SmsQuietHoursError) {
+      await recordFishNotification(env.DB, "hunger", mood, hungerScore, message, null, null, "skipped", "quiet_hours", {
+        recipientMemberId: memberId,
+        diagnosticContext: error.diagnostics,
+      });
+      return { sent: false, skipped: true, reason: "quiet_hours", type: "hunger", mood, hungerScore, message, memberId, memberName, zeroChoreStreak, diagnostics: error.diagnostics };
+    }
+
+    if (error instanceof SmsRecipientFilterError) {
+      await recordFishNotification(env.DB, "hunger", mood, hungerScore, message, null, null, "skipped", error.reason, {
+        recipientMemberId: memberId,
+        diagnosticContext: error.diagnostics,
+      });
+      return { sent: false, skipped: true, reason: error.reason, type: "hunger", mood, hungerScore, message, memberId, memberName, zeroChoreStreak, diagnostics: error.diagnostics };
+    }
+
+    const failure = smsFailureDetails(error);
+    await recordFishNotification(env.DB, "hunger", mood, hungerScore, message, null, null, "failed", "individual_hunger_accountability", {
+      recipientMemberId: memberId,
+      errorMessage: failure.errorMessage,
+      providerStatus: failure.providerStatus,
+      providerStatusCode: failure.providerStatusCode,
+      providerErrorCode: failure.providerErrorCode,
+      providerErrorMessage: failure.providerErrorMessage,
+      diagnosticContext: failure.diagnosticContext,
+    });
+    return {
+      sent: false,
+      skipped: false,
+      reason: "failed",
+      type: "hunger",
+      mood,
+      hungerScore,
+      message,
+      memberId,
+      memberName,
+      zeroChoreStreak,
+      errorMessage: failure.errorMessage,
+      diagnostics: failure.diagnosticContext,
+    };
+  }
+}
+
+async function runIndividualHungerAccountabilityNotifications(
+  env: Env,
+  calculation: HungerCalculation,
+): Promise<IndividualHungerAccountabilityResult[]> {
+  if (!fishHungerMoodIsHungryOrWorse(calculation.mood)) return [];
+
+  const streaks = await getIndividualZeroChoreStreaks(env.DB);
+  const results: IndividualHungerAccountabilityResult[] = [];
+
+  for (const streak of streaks) {
+    if (streak.zeroChoreStreak < 2) continue;
+    if (await alreadySentIndividualHungerTextToday(env.DB, streak.memberId)) continue;
+
+    results.push(
+      await sendIndividualHungerAccountabilityText(
+        env,
+        streak.memberId,
+        streak.memberName,
+        streak.zeroChoreStreak,
+        calculation.score,
+        calculation.mood,
+      ),
+    );
   }
 
-  if (calculation.mood === "happy") {
+  return results;
+}
+
+async function getChildRewardCandidates(db: D1Database, calendar: HouseholdCalendar) {
+  const { results } = await db
+    .prepare(
+      `SELECT
+        fm.id AS member_id,
+        ${publicMemberNameSql("fm")} AS member_name,
+        COUNT(cc.id) AS completed_chores_today
+       FROM family_members fm
+       JOIN chore_completions cc ON cc.completed_by_member_id = fm.id
+       WHERE fm.active = 1
+        AND fm.member_type = 'child'
+        AND cc.completed_at >= ?
+        AND cc.completed_at < ?
+       GROUP BY fm.id
+       HAVING completed_chores_today > 0
+       ORDER BY fm.sort_order, member_name`,
+    )
+    .bind(calendar.todayStart, calendar.todayEnd)
+    .all<ChildRewardCandidate>();
+
+  return results;
+}
+
+async function alreadySentRewardTextForChoreDate(db: D1Database, memberId: number, choreDate: string) {
+  const row = await db
+    .prepare(
+      `SELECT id
+       FROM fish_notification_history
+       WHERE notification_type = 'fish_reward_thank_you'
+        AND recipient_member_id = ?
+        AND chore_date = ?
+        AND status = 'sent'
+       LIMIT 1`,
+    )
+    .bind(memberId, choreDate)
+    .first<{ id: number }>();
+
+  return row !== null;
+}
+
+async function getLastRewardMessageForMember(db: D1Database, memberId: number, choreDate: string) {
+  return db
+    .prepare(
+      `SELECT id, message_body, created_at
+       FROM fish_notification_history
+       WHERE notification_type = 'fish_reward_thank_you'
+        AND recipient_member_id = ?
+        AND chore_date <> ?
+        AND status = 'sent'
+        AND message_body IS NOT NULL
+       ORDER BY datetime(created_at) DESC, id DESC
+       LIMIT 1`,
+    )
+    .bind(memberId, choreDate)
+    .first<FishNotificationHistoryRow>();
+}
+
+async function sendFishRewardThankYouText(
+  env: Env,
+  candidate: ChildRewardCandidate,
+  choreDate: string,
+  aquariumMood: AquariumMood,
+): Promise<FishRewardThankYouResult> {
+  const completedChoresToday = candidate.completed_chores_today;
+  const chorePoints = getChorePoints(completedChoresToday);
+  const fishMoodModifier = getFishMoodModifier(aquariumMood);
+  const finalRewardScore = getFinalRewardScore(completedChoresToday, aquariumMood);
+  const tier = rewardTierForScore(finalRewardScore);
+  const mood = fishHungerMoodForAquariumMood(aquariumMood);
+  const lastRewardMessage = await getLastRewardMessageForMember(env.DB, candidate.member_id, choreDate);
+  const message = chooseRewardMessage(tier, lastRewardMessage?.message_body ?? null);
+  const recipientOptions: SmsRecipientOptions = { targetMemberIds: [candidate.member_id] };
+  const recordOptionsBase: FishNotificationRecordOptions = {
+    recipientMemberId: candidate.member_id,
+    choreDate,
+    completedChoresToday,
+    fishMoodAtSendTime: aquariumMood,
+    chorePoints,
+    fishMoodModifier,
+    finalRewardScore,
+  };
+
+  try {
+    const results = await sendTwilioSms(env, message, recipientOptions);
+
+    for (const result of results) {
+      await recordFishNotification(
+        env.DB,
+        "fish_reward_thank_you",
+        mood,
+        0,
+        message,
+        result.recipient,
+        result.providerMessageId,
+        "sent",
+        "end_of_day_reward",
+        {
+          ...recordOptionsBase,
+          providerStatus: result.providerStatus,
+          diagnosticContext: {
+            sms: await getSmsConfigDiagnostics(env, recipientOptions),
+            provider: {
+              recipient: result.recipient,
+              twilioStatus: result.providerStatus,
+            },
+          },
+        },
+      );
+    }
+
+    return {
+      sent: true,
+      skipped: false,
+      reason: "end_of_day_reward",
+      type: "fish_reward_thank_you",
+      mood,
+      hungerScore: 0,
+      message,
+      memberId: candidate.member_id,
+      memberName: candidate.member_name,
+      choreDate,
+      completedChoresToday,
+      aquariumMood,
+      chorePoints,
+      fishMoodModifier,
+      finalRewardScore,
+      tier,
+    };
+  } catch (error) {
+    if (error instanceof SmsQuietHoursError) {
+      await recordFishNotification(env.DB, "fish_reward_thank_you", mood, 0, message, null, null, "skipped", "quiet_hours", {
+        ...recordOptionsBase,
+        diagnosticContext: error.diagnostics,
+      });
+      return {
+        sent: false,
+        skipped: true,
+        reason: "quiet_hours",
+        type: "fish_reward_thank_you",
+        mood,
+        hungerScore: 0,
+        message,
+        memberId: candidate.member_id,
+        memberName: candidate.member_name,
+        choreDate,
+        completedChoresToday,
+        aquariumMood,
+        chorePoints,
+        fishMoodModifier,
+        finalRewardScore,
+        tier,
+        diagnostics: error.diagnostics,
+      };
+    }
+
+    if (error instanceof SmsRecipientFilterError) {
+      await recordFishNotification(env.DB, "fish_reward_thank_you", mood, 0, message, null, null, "skipped", error.reason, {
+        ...recordOptionsBase,
+        diagnosticContext: error.diagnostics,
+      });
+      return {
+        sent: false,
+        skipped: true,
+        reason: error.reason,
+        type: "fish_reward_thank_you",
+        mood,
+        hungerScore: 0,
+        message,
+        memberId: candidate.member_id,
+        memberName: candidate.member_name,
+        choreDate,
+        completedChoresToday,
+        aquariumMood,
+        chorePoints,
+        fishMoodModifier,
+        finalRewardScore,
+        tier,
+        diagnostics: error.diagnostics,
+      };
+    }
+
+    const failure = smsFailureDetails(error);
+    await recordFishNotification(env.DB, "fish_reward_thank_you", mood, 0, message, null, null, "failed", "end_of_day_reward", {
+      ...recordOptionsBase,
+      errorMessage: failure.errorMessage,
+      providerStatus: failure.providerStatus,
+      providerStatusCode: failure.providerStatusCode,
+      providerErrorCode: failure.providerErrorCode,
+      providerErrorMessage: failure.providerErrorMessage,
+      diagnosticContext: failure.diagnosticContext,
+    });
+    return {
+      sent: false,
+      skipped: false,
+      reason: "failed",
+      type: "fish_reward_thank_you",
+      mood,
+      hungerScore: 0,
+      message,
+      memberId: candidate.member_id,
+      memberName: candidate.member_name,
+      choreDate,
+      completedChoresToday,
+      aquariumMood,
+      chorePoints,
+      fishMoodModifier,
+      finalRewardScore,
+      tier,
+      errorMessage: failure.errorMessage,
+      diagnostics: failure.diagnosticContext,
+    };
+  }
+}
+
+async function runFishRewardThankYouNotifications(env: Env, reason = "scheduled", now = new Date()): Promise<ScheduledRewardNotificationResult> {
+  const calendar = getHouseholdCalendar(now);
+
+  if (reason === "scheduled" && !isInsideRewardSendWindow(now)) {
+    return { ran: false, skipped: true, reason: "outside_reward_window", choreDate: calendar.todayDate, aquariumMood: null, results: [] };
+  }
+
+  const [aquariumMood, candidates] = await Promise.all([
+    getCurrentAquariumMood(env.DB),
+    getChildRewardCandidates(env.DB, calendar),
+  ]);
+  const results: FishRewardThankYouResult[] = [];
+
+  for (const candidate of candidates) {
+    if (await alreadySentRewardTextForChoreDate(env.DB, candidate.member_id, calendar.todayDate)) continue;
+
+    results.push(await sendFishRewardThankYouText(env, candidate, calendar.todayDate, aquariumMood));
+  }
+
+  return {
+    ran: true,
+    skipped: false,
+    reason,
+    choreDate: calendar.todayDate,
+    aquariumMood,
+    results,
+  };
+}
+
+async function runFishHungerNotification(env: Env, reason = "scheduled"): Promise<ScheduledHungerNotificationResult> {
+  const [aquariumMood, calculation] = await Promise.all([
+    getCurrentAquariumMood(env.DB),
+    calculateHungerScore(env.DB),
+  ]);
+  const mood = fishHungerMoodForAquariumMood(aquariumMood);
+  const hungerScore = hungerScoreForAquariumMood(aquariumMood);
+  const notificationCalculation = { ...calculation, score: hungerScore, mood };
+
+  if (mood === "happy") {
     return {
       sent: false,
       skipped: true,
       reason: "happy",
       type: "hunger",
-      mood: calculation.mood,
-      hungerScore: calculation.score,
+      mood,
+      hungerScore,
       message: null,
-      calculation,
+      aquariumMood,
+      calculation: notificationCalculation,
+      individualAccountability: [],
     };
   }
 
-  if (calculation.mood === "slightly_hungry" && randomPercent() >= 20) {
+  if (mood === "slightly_hungry" && randomPercent() >= 20) {
     return {
       sent: false,
       skipped: true,
       reason: "slightly_hungry_probability",
       type: "hunger",
-      mood: calculation.mood,
-      hungerScore: calculation.score,
+      mood,
+      hungerScore,
       message: null,
-      calculation,
+      aquariumMood,
+      calculation: notificationCalculation,
+      individualAccountability: [],
     };
   }
 
-  const result = await sendFishNotification(env, "hunger", reason, calculation.score, calculation.mood);
-  return { ...result, calculation };
+  const result = await sendFishNotification(env, "hunger", reason, hungerScore, mood);
+  const individualAccountability = await runIndividualHungerAccountabilityNotifications(env, notificationCalculation);
+  return { ...result, aquariumMood, calculation: notificationCalculation, individualAccountability };
 }
 
-async function countTodayChildAquariumCompletions(db: D1Database, calendar: HouseholdCalendar) {
-  const row = await db
-    .prepare(
-      `SELECT COUNT(*) AS count
-       FROM chore_completions cc
-       JOIN family_members fm ON fm.id = cc.completed_by_member_id
-       JOIN chores c ON c.id = cc.chore_id
-       WHERE fm.member_type = 'child'
-        AND COALESCE(c.feeds_aquarium, 1) = 1
-        AND cc.completed_at >= ?
-        AND cc.completed_at < ?`,
-    )
-    .bind(calendar.todayStart, calendar.todayEnd)
-    .first<{ count: number }>();
+async function getTodayAquariumParticipation(db: D1Database, calendar: HouseholdCalendar): Promise<AquariumParticipation> {
+  const [completionRow, childRow] = await Promise.all([
+    db
+      .prepare(
+        `SELECT
+          COUNT(*) AS todayChildCount,
+          COUNT(DISTINCT cc.completed_by_member_id) AS todayDistinctChildCount
+         FROM chore_completions cc
+         JOIN family_members fm ON fm.id = cc.completed_by_member_id
+         JOIN chores c ON c.id = cc.chore_id
+         WHERE fm.member_type = 'child'
+          AND COALESCE(c.feeds_aquarium, 1) = 1
+          AND cc.completed_at >= ?
+          AND cc.completed_at < ?`,
+      )
+      .bind(calendar.todayStart, calendar.todayEnd)
+      .first<{ todayChildCount: number; todayDistinctChildCount: number }>(),
+    db
+      .prepare(
+        `SELECT COUNT(*) AS activeChildCount
+         FROM family_members
+         WHERE active = 1
+          AND member_type = 'child'`,
+      )
+      .first<{ activeChildCount: number }>(),
+  ]);
 
-  return row?.count ?? 0;
+  return {
+    todayChildCount: completionRow?.todayChildCount ?? 0,
+    todayDistinctChildCount: completionRow?.todayDistinctChildCount ?? 0,
+    activeChildCount: childRow?.activeChildCount ?? 0,
+  };
 }
 
 async function getCurrentAquariumMood(db: D1Database) {
   const state = await getAquariumState(db);
   const calendar = getHouseholdCalendar();
-  const todayChildCount = await countTodayChildAquariumCompletions(db, calendar);
+  const participation = await getTodayAquariumParticipation(db, calendar);
 
-  return getAquariumMood(state, todayChildCount);
+  return getAquariumMood(state, participation);
 }
 
 async function getFishTextActiveUntil(db: D1Database) {
@@ -1345,7 +2121,7 @@ async function sendCurrentAquariumModeNotification(env: Env): Promise<CurrentMod
   const lastSentMessage = await getLastSentNotification(env.DB);
   const message = chooseCurrentAquariumModeMessage(aquariumMood, lastSentMessage?.message_body ?? null);
   const recipientOptions: SmsRecipientOptions = {
-    onlyMembersWithoutChoresToday: shouldTextOnlyMembersWithoutChoresToday("test", mood),
+    onlyAdults: true,
   };
 
   try {
@@ -1449,11 +2225,11 @@ async function ensureAquarium(db: D1Database) {
   await db
     .prepare(
       `INSERT OR IGNORE INTO aquarium_state
-        (id, food_reserve, max_food_reserve, daily_food_consumption, last_consumed_on, total_chore_completions, creature_unlock_interval, growth_days, last_fed_at)
+        (id, food_reserve, max_food_reserve, daily_food_consumption, last_consumed_on, total_chore_completions, creature_unlock_interval, egg_incubation_minutes, growth_days, last_fed_at)
        VALUES
-        (1, 14, 30, 2, ?, COALESCE((SELECT COUNT(*) FROM chore_completions), 0), 25, 7, datetime('now'))`,
+        (1, 14, 30, 2, ?, COALESCE((SELECT COUNT(*) FROM chore_completions), 0), 25, ?, 7, datetime('now'))`,
     )
-    .bind(calendar.todayDate)
+    .bind(calendar.todayDate, defaultEggIncubationMinutes)
     .run();
 
   await db
@@ -1466,7 +2242,7 @@ async function ensureAquarium(db: D1Database) {
     .run();
 }
 
-async function applyAquariumMaintenance(db: D1Database) {
+async function applyAquariumMaintenance(db: D1Database, env?: Env) {
   await ensureAquarium(db);
   const calendar = getHouseholdCalendar();
 
@@ -1499,6 +2275,16 @@ async function applyAquariumMaintenance(db: D1Database) {
     .bind(calendar.todayDate, calendar.todayDate, calendar.todayDate)
     .run();
 
+  const growingCreatures = await db
+    .prepare(
+      `SELECT id
+       FROM aquarium_creatures
+       WHERE growth_stage = 'baby'
+        AND julianday('now') - julianday(created_at) >= (SELECT growth_days FROM aquarium_state WHERE id = 1)
+        AND (SELECT food_reserve * 1.0 / max_food_reserve FROM aquarium_state WHERE id = 1) >= 0.4`,
+    )
+    .all<{ id: number }>();
+
   await db
     .prepare(
       `UPDATE aquarium_creatures
@@ -1509,6 +2295,21 @@ async function applyAquariumMaintenance(db: D1Database) {
         AND (SELECT food_reserve * 1.0 / max_food_reserve FROM aquarium_state WHERE id = 1) >= 0.4`,
     )
     .run();
+
+  await db
+    .prepare(
+      `UPDATE aquarium_state
+       SET everything_good_until = NULL,
+           updated_at = datetime('now')
+       WHERE id = 1
+        AND everything_good_until IS NOT NULL
+        AND datetime(everything_good_until) <= datetime('now')`,
+    )
+    .run();
+
+  if (env && growingCreatures.results.length > 0) {
+    await sendFishNotification(env, "fish_growth", "fish_growth");
+  }
 
   const pendingEggs = await db
     .prepare(
@@ -1552,8 +2353,8 @@ async function applyAquariumMaintenance(db: D1Database) {
   }
 }
 
-async function getAquariumState(db: D1Database) {
-  await applyAquariumMaintenance(db);
+async function getAquariumState(db: D1Database, env?: Env) {
+  await applyAquariumMaintenance(db, env);
 
   const state = await db
     .prepare(
@@ -1571,7 +2372,8 @@ async function getAquariumState(db: D1Database) {
         last_fed_at,
         panic_mode,
         panic_chores_needed,
-        panic_expires_at
+        panic_expires_at,
+        everything_good_until
        FROM aquarium_state
        WHERE id = 1`,
     )
@@ -1584,8 +2386,8 @@ async function getAquariumState(db: D1Database) {
   return state;
 }
 
-async function listAquarium(db: D1Database) {
-  const state = await getAquariumState(db);
+async function listAquarium(db: D1Database, env?: Env) {
+  const state = await getAquariumState(db, env);
   const calendar = getHouseholdCalendar();
 
   const [
@@ -1596,8 +2398,9 @@ async function listAquarium(db: D1Database) {
     yesterdayLeaderboard,
     allTimeLeaderboard,
     yesterdayCompletions,
-    todayChildCount,
+    participation,
     fishTextActiveUntil,
+    todayMoodCompletions,
   ] = await Promise.all([
     db
       .prepare(
@@ -1693,11 +2496,30 @@ async function listAquarium(db: D1Database) {
       )
       .bind(calendar.yesterdayStart, calendar.yesterdayEnd)
       .all(),
-    countTodayChildAquariumCompletions(db, calendar),
+    getTodayAquariumParticipation(db, calendar),
     getFishTextActiveUntil(db),
+    db
+      .prepare(
+        `SELECT
+          cc.id,
+          fm.id AS member_id,
+          ${publicMemberNameSql("fm")} AS member_name,
+          fm.member_type,
+          c.name AS chore_name,
+          COALESCE(c.feeds_aquarium, 1) AS feeds_aquarium,
+          cc.completed_at
+         FROM chore_completions cc
+         JOIN family_members fm ON fm.id = cc.completed_by_member_id
+         JOIN chores c ON c.id = cc.chore_id
+         WHERE cc.completed_at >= ?
+          AND cc.completed_at < ?
+         ORDER BY cc.completed_at, cc.id`,
+      )
+      .bind(calendar.todayStart, calendar.todayEnd)
+      .all<AquariumMoodDebugCompletion>(),
   ]);
 
-  const mood = getAquariumMood(state, todayChildCount);
+  const mood = getAquariumMood(state, participation);
 
   return json({
     ok: true,
@@ -1705,9 +2527,10 @@ async function listAquarium(db: D1Database) {
       state: {
         ...state,
         mood,
-        mood_message: getAquariumMoodMessage(mood, todayChildCount),
+        mood_message: getAquariumMoodMessage(mood, participation.todayChildCount),
         panic_mode: state.panic_mode,
         panic_chores_needed: state.panic_chores_needed,
+        everything_good_until: state.everything_good_until,
         hours_since_fed: Math.round(hoursSinceAquariumFed(state)),
         fish_text_active_until: fishTextActiveUntil,
       },
@@ -1720,6 +2543,7 @@ async function listAquarium(db: D1Database) {
         allTime: allTimeLeaderboard.results,
       },
       yesterdayCompletions: yesterdayCompletions.results,
+      moodDebug: getAquariumMoodDebug(state, participation, calendar, todayMoodCompletions.results),
     },
   });
 }
@@ -1755,17 +2579,14 @@ async function addAquariumFoodForCompletion(
     .bind(fedMessage, memberName, completionId)
     .run();
 
-  const [state, todayChildCount2] = await Promise.all([
+  const [state, participation] = await Promise.all([
     getAquariumState(db),
-    countTodayChildAquariumCompletions(db, calendar),
+    getTodayAquariumParticipation(db, calendar),
   ]);
   let egg: Record<string, unknown> | null = null;
 
   if (state.total_chore_completions > 0 && state.total_chore_completions % state.creature_unlock_interval === 0) {
-    // Keep unlocking crabs until the family has discovered their first one,
-    // then go back to random species.
-    const hasCrab = await aquariumHasCrab(db);
-    const speciesId = hasCrab ? chooseRandomAquariumSpeciesId() : "crab";
+    const speciesId = await nextAquariumSpeciesId(db);
     const eggResult = await db
       .prepare(
         `INSERT INTO aquarium_eggs (species_id, hatch_after, completion_id)
@@ -1784,15 +2605,16 @@ async function addAquariumFoodForCompletion(
       .first();
   }
 
-  const mood2 = getAquariumMood(state, todayChildCount2);
+  const mood2 = getAquariumMood(state, participation);
   return {
     fedMessage,
     state: {
       ...state,
       mood: mood2,
-      mood_message: getAquariumMoodMessage(mood2, todayChildCount2),
+      mood_message: getAquariumMoodMessage(mood2, participation.todayChildCount),
       panic_mode: state.panic_mode,
       panic_chores_needed: state.panic_chores_needed,
+      everything_good_until: state.everything_good_until,
     },
     egg,
   };
@@ -1807,6 +2629,7 @@ async function triggerAquariumPanic(db: D1Database) {
        SET panic_mode = 1,
            panic_chores_needed = 3,
            panic_expires_at = datetime('now', '+4 hours'),
+           everything_good_until = NULL,
            last_fed_at = datetime('now', '-48 hours'),
            updated_at = datetime('now')
        WHERE id = 1`,
@@ -1822,6 +2645,7 @@ async function clearAquariumPanic(db: D1Database) {
        SET panic_mode = 0,
            panic_chores_needed = 0,
            panic_expires_at = NULL,
+           everything_good_until = datetime('now', '+4 hours'),
            last_fed_at = datetime('now'),
            updated_at = datetime('now')
        WHERE id = 1`,
@@ -1836,11 +2660,41 @@ async function clearAquariumPanic(db: D1Database) {
   return json({ ok: true, message: "Panic cleared. The fish are thriving again!" });
 }
 
-async function aquariumHasCrab(db: D1Database) {
-  const row = await db
-    .prepare(`SELECT 1 FROM aquarium_creatures WHERE species_id = 'crab' LIMIT 1`)
-    .first<{ 1: number }>();
-  return row !== null;
+async function triggerAquariumEverythingGood(db: D1Database) {
+  await ensureAquarium(db);
+  await db
+    .prepare(
+      `UPDATE aquarium_state
+       SET panic_mode = 0,
+           panic_chores_needed = 0,
+           panic_expires_at = NULL,
+           everything_good_until = datetime('now', '+4 hours'),
+           last_fed_at = datetime('now'),
+           updated_at = datetime('now')
+       WHERE id = 1`,
+    )
+    .run();
+  await db
+    .prepare(
+      `INSERT INTO aquarium_events (event_type, message)
+       VALUES ('mood_reset', 'Everything looked good, so a parent made the fish happy for a while.')`,
+    )
+    .run();
+  return json({ ok: true, message: "Everything good. The fish will stay happy for 4 hours." });
+}
+
+async function nextAquariumSpeciesId(db: D1Database) {
+  const { results } = await db
+    .prepare(
+      `SELECT species_id FROM aquarium_creatures
+       UNION
+       SELECT species_id FROM aquarium_eggs
+       WHERE hatched_at IS NULL`,
+    )
+    .all<{ species_id: string }>();
+  const discoveredOrPending = new Set(results.map((row) => row.species_id));
+
+  return aquariumSpeciesIds.find((speciesId) => !discoveredOrPending.has(speciesId)) ?? "seahorse";
 }
 
 function aquariumSpeciesName(speciesId: string) {
@@ -1850,6 +2704,7 @@ function aquariumSpeciesName(speciesId: string) {
   if (speciesId === "crab") return "crab";
   if (speciesId === "pufferfish") return "pufferfish";
   if (speciesId === "starfish") return "starfish";
+  if (speciesId === "clam") return "clam";
   return "aquarium friend";
 }
 
@@ -2257,6 +3112,11 @@ async function recordCompletion(request: Request, env: Env, ctx: ExecutionContex
     );
   }
 
+  const storyUnlock = await unlockNextStoryScene(db, memberId).catch((error) => {
+    console.error("Story unlock failed", error);
+    return null;
+  });
+
   return json({
     ok: true,
     completion: {
@@ -2268,6 +3128,7 @@ async function recordCompletion(request: Request, env: Env, ctx: ExecutionContex
     },
     earnedBug,
     aquariumEvent,
+    storyUnlock,
   });
 }
 
@@ -2746,7 +3607,19 @@ async function saveAquariumConfig(request: Request, db: D1Database) {
 }
 
 async function exportData(db: D1Database) {
-  const [members, chores, assignments, completions, sessions, notes, aquariumState, aquariumCreatures, aquariumEggs, aquariumEvents] = await Promise.all([
+  const [
+    members,
+    chores,
+    assignments,
+    completions,
+    sessions,
+    notes,
+    aquariumState,
+    aquariumCreatures,
+    aquariumEggs,
+    aquariumEvents,
+    appSettings,
+  ] = await Promise.all([
     db.prepare("SELECT * FROM family_members ORDER BY sort_order, id").all(),
     db.prepare("SELECT * FROM chores ORDER BY active DESC, id").all(),
     db.prepare("SELECT * FROM chore_assignments ORDER BY chore_id, family_member_id").all(),
@@ -2757,6 +3630,7 @@ async function exportData(db: D1Database) {
     db.prepare("SELECT * FROM aquarium_creatures ORDER BY created_at, id").all(),
     db.prepare("SELECT * FROM aquarium_eggs ORDER BY created_at, id").all(),
     db.prepare("SELECT * FROM aquarium_events ORDER BY created_at DESC, id DESC LIMIT 500").all(),
+    getAppSettings(db),
   ]);
 
   return json({
@@ -2772,7 +3646,184 @@ async function exportData(db: D1Database) {
     aquariumCreatures: aquariumCreatures.results,
     aquariumEggs: aquariumEggs.results,
     aquariumEvents: aquariumEvents.results,
+    appSettings,
   });
+}
+
+// ---- Story engine ------------------------------------------------------
+// Comic scenes unlocked by chores, paced by a per-scene release calendar.
+
+type StorySeriesRow = {
+  id: number;
+  slug: string;
+  title: string;
+  total_scenes: number;
+  start_date: string;
+  status: string;
+};
+
+type StorySceneRow = {
+  id: number;
+  scene_order: number;
+  release_offset_days: number;
+  title: string;
+  setting: string;
+  script: string;
+};
+
+function parseDateToUtc(dateStr: string): number {
+  const [y, m, d] = String(dateStr).split("-").map((part) => Number(part));
+  return Date.UTC(y, (m || 1) - 1, d || 1);
+}
+
+function daysBetween(startDate: string, todayDate: string): number {
+  const start = parseDateToUtc(startDate);
+  const today = parseDateToUtc(todayDate);
+  if (Number.isNaN(start) || Number.isNaN(today)) return 0;
+  return Math.floor((today - start) / 86400000);
+}
+
+function addDaysToDate(dateStr: string, days: number): string {
+  const next = new Date(parseDateToUtc(dateStr) + days * 86400000);
+  const y = next.getUTCFullYear();
+  const m = String(next.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(next.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+async function getActiveStorySeries(db: D1Database): Promise<StorySeriesRow | null> {
+  return await db
+    .prepare(
+      "SELECT id, slug, title, total_scenes, start_date, status FROM story_series WHERE status = 'active' ORDER BY id LIMIT 1",
+    )
+    .first<StorySeriesRow>();
+}
+
+async function getStorySceneRows(db: D1Database, seriesId: number): Promise<StorySceneRow[]> {
+  const { results } = await db
+    .prepare(
+      "SELECT id, scene_order, release_offset_days, title, setting, script FROM story_scenes WHERE series_id = ? ORDER BY scene_order",
+    )
+    .bind(seriesId)
+    .all<StorySceneRow>();
+  return results ?? [];
+}
+
+async function getMemberUnlockedIndex(db: D1Database, memberId: number, seriesId: number): Promise<number> {
+  const row = await db
+    .prepare("SELECT unlocked_index FROM story_progress WHERE member_id = ? AND series_id = ?")
+    .bind(memberId, seriesId)
+    .first<{ unlocked_index: number }>();
+  return row ? Math.max(1, row.unlocked_index) : 1;
+}
+
+function parseSceneScript(raw: string) {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { narration: "", beats: [] };
+  }
+}
+
+function countReleasedScenes(scenes: StorySceneRow[], daysSinceStart: number): number {
+  return scenes.filter((scene) => scene.release_offset_days <= daysSinceStart).length;
+}
+
+async function getStoryForMember(db: D1Database, memberId: number | null) {
+  const series = await getActiveStorySeries(db);
+  if (!series) {
+    return {
+      ok: true,
+      series: null,
+      releasedCount: 0,
+      accessibleCount: 0,
+      totalScenes: 0,
+      nextReleaseDate: null,
+      canUnlockMore: false,
+      scenes: [],
+    };
+  }
+
+  const calendar = getHouseholdCalendar();
+  const scenes = await getStorySceneRows(db, series.id);
+  const daysSinceStart = daysBetween(series.start_date, calendar.todayDate);
+  const releasedCount = countReleasedScenes(scenes, daysSinceStart);
+  const unlocked = memberId ? await getMemberUnlockedIndex(db, memberId, series.id) : releasedCount;
+  const accessibleCount = Math.min(releasedCount, Math.max(unlocked, 1));
+
+  const nextUnreleased = scenes.find((scene) => scene.release_offset_days > daysSinceStart);
+  const nextReleaseDate = nextUnreleased ? addDaysToDate(series.start_date, nextUnreleased.release_offset_days) : null;
+
+  const accessibleScenes = scenes.slice(0, accessibleCount).map((scene) => ({
+    scene_order: scene.scene_order,
+    title: scene.title,
+    setting: scene.setting,
+    script: parseSceneScript(scene.script),
+  }));
+
+  return {
+    ok: true,
+    series: { slug: series.slug, title: series.title, total_scenes: series.total_scenes || scenes.length },
+    releasedCount,
+    accessibleCount,
+    totalScenes: scenes.length,
+    nextReleaseDate,
+    canUnlockMore: accessibleCount < releasedCount,
+    scenes: accessibleScenes,
+  };
+}
+
+async function unlockNextStoryScene(db: D1Database, memberId: number) {
+  const series = await getActiveStorySeries(db);
+  if (!series) return null;
+
+  const calendar = getHouseholdCalendar();
+  const scenes = await getStorySceneRows(db, series.id);
+  const daysSinceStart = daysBetween(series.start_date, calendar.todayDate);
+  const releasedCount = countReleasedScenes(scenes, daysSinceStart);
+  const current = await getMemberUnlockedIndex(db, memberId, series.id);
+  const next = Math.min(releasedCount, current + 1);
+
+  await db
+    .prepare(
+      `INSERT INTO story_progress (member_id, series_id, unlocked_index, last_unlocked_at)
+       VALUES (?, ?, ?, datetime('now'))
+       ON CONFLICT(member_id, series_id)
+       DO UPDATE SET unlocked_index = excluded.unlocked_index, last_unlocked_at = datetime('now')`,
+    )
+    .bind(memberId, series.id, next)
+    .run();
+
+  return {
+    seriesSlug: series.slug,
+    unlockedIndex: next,
+    releasedCount,
+    caughtUp: next >= releasedCount,
+    newlyUnlocked: next > current,
+  };
+}
+
+async function getAllStoryScenes(db: D1Database, slug: string | null) {
+  const series = slug
+    ? await db
+        .prepare(
+          "SELECT id, slug, title, total_scenes, start_date, status FROM story_series WHERE slug = ? LIMIT 1",
+        )
+        .bind(slug)
+        .first<StorySeriesRow>()
+    : await getActiveStorySeries(db);
+  if (!series) return { ok: true, series: null, scenes: [] };
+  const scenes = await getStorySceneRows(db, series.id);
+  return {
+    ok: true,
+    series: { slug: series.slug, title: series.title, total_scenes: series.total_scenes || scenes.length },
+    scenes: scenes.map((scene) => ({
+      scene_order: scene.scene_order,
+      title: scene.title,
+      setting: scene.setting,
+      script: parseSceneScript(scene.script),
+    })),
+  };
 }
 
 export default {
@@ -2827,8 +3878,12 @@ export default {
       return householdStatus(env.DB);
     }
 
+    if (request.method === "GET" && url.pathname === "/api/settings") {
+      return listAppSettings(env.DB);
+    }
+
     if (request.method === "GET" && url.pathname === "/api/aquarium") {
-      return listAquarium(env.DB);
+      return listAquarium(env.DB, env);
     }
 
     if (request.method === "GET" && url.pathname === "/api/notes") {
@@ -2840,7 +3895,7 @@ export default {
     }
 
     if (request.method === "POST" && url.pathname === "/api/fish-notifications/current-mode") {
-      if (!envFlag(env.SMS_TEST_MODE, true) && !requireParentPin(request, env)) {
+      if (!(await isTestModeEnabled(env)) && !requireParentPin(request, env)) {
         return unauthorized();
       }
 
@@ -2858,6 +3913,16 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/api/completions/recent") {
       return recentCompletions(env.DB);
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/story/scenes") {
+      return json(await getAllStoryScenes(env.DB, url.searchParams.get("slug")));
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/story") {
+      const memberIdParam = url.searchParams.get("memberId");
+      const memberId = memberIdParam ? asPositiveInteger(memberIdParam) : null;
+      return json(await getStoryForMember(env.DB, memberId));
     }
 
     if (request.method === "POST" && url.pathname === "/api/session/select-member") {
@@ -2908,6 +3973,10 @@ export default {
       return listNotes(env.DB, true);
     }
 
+    if (request.method === "PUT" && url.pathname === "/api/admin/settings") {
+      return saveAppSettings(request, env.DB);
+    }
+
     if (request.method === "POST" && url.pathname === "/api/admin/notes") {
       return saveNote(request, env.DB, null);
     }
@@ -2932,13 +4001,17 @@ export default {
       return clearAquariumPanic(env.DB);
     }
 
+    if (request.method === "POST" && url.pathname === "/api/admin/aquarium-everything-good") {
+      return triggerAquariumEverythingGood(env.DB);
+    }
+
     if (request.method === "GET" && url.pathname === "/api/admin/fish-notifications/status") {
       const calculation = await calculateHungerScore(env.DB);
       return json({
         ok: true,
         sms: {
           enabled: envFlag(env.SMS_ENABLED, true),
-          testMode: envFlag(env.SMS_TEST_MODE, true),
+          testMode: await isTestModeEnabled(env),
           recipients: await smsRecipients(env),
           diagnostics: await getSmsConfigDiagnostics(env),
         },
@@ -2948,6 +4021,11 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/api/admin/fish-notifications/run") {
       const result = await runFishHungerNotification(env, "manual_run");
+      return json({ ok: true, result });
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/admin/fish-notifications/rewards/run") {
+      const result = await runFishRewardThankYouNotifications(env, "manual_run");
       return json({ ok: true, result });
     }
 
@@ -2964,8 +4042,11 @@ export default {
   },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(
-      runFishHungerNotification(env).catch((error) => {
-        console.error("Scheduled fish hunger SMS failed", error);
+      (async () => {
+        await runFishHungerNotification(env);
+        await runFishRewardThankYouNotifications(env);
+      })().catch((error) => {
+        console.error("Scheduled fish SMS failed", error);
       }),
     );
   },

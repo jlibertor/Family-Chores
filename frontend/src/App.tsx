@@ -4,6 +4,8 @@ import { avatars, defaultAvatarId, getAvatar } from './avatars'
 import { bugDefinitions, getBugDefinition } from './bugs'
 import { AquariumFriendsView, AquariumView, type AquariumData } from './components/aquarium/AquariumView'
 import { BugPhysicsBox, type ActiveBugViewModel } from './components/bugs/BugPhysicsBox'
+import { ComicView } from './components/story/ComicView'
+import { SceneStepper } from './components/story/SceneStepper'
 
 type MemberType = 'adult' | 'child'
 type FrequencyType = 'daily' | 'weekdays' | 'weekends' | 'weekly' | 'monthly' | 'as_needed'
@@ -141,6 +143,10 @@ type AquariumConfigDraft = {
   growth_days: number
 }
 
+type AppSettings = {
+  test_mode: 0 | 1
+}
+
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
 type HistoryRange = 'today' | '7d' | '30d'
 
@@ -150,8 +156,10 @@ const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') ?? ''
 const idleRedirectMs = 3 * 60 * 1000
 const defaultFishTextStartTime = '09:00'
 const defaultFishTextStopTime = '23:00'
+const defaultEggIncubationMinutes = 3 * 24 * 60
+const defaultAppSettings: AppSettings = { test_mode: 0 }
 
-const routes = ['/today', '/display', '/aquarium', '/aquarium-friends', '/choose-mode', '/member', '/kiosk', '/history', '/bug-box', '/admin'] as const
+const routes = ['/today', '/display', '/aquarium', '/aquarium-debug', '/aquarium-friends', '/story', '/choose-mode', '/member', '/kiosk', '/history', '/bug-box', '/admin', '/scene-stepper'] as const
 
 function currentTimestamp() {
   return Date.now()
@@ -203,7 +211,7 @@ const defaultAquariumConfigDraft: AquariumConfigDraft = {
   max_food_reserve: 30,
   daily_food_consumption: 4,
   creature_unlock_interval: 25,
-  egg_incubation_minutes: 60,
+  egg_incubation_minutes: defaultEggIncubationMinutes,
   growth_days: 7,
 }
 
@@ -365,6 +373,7 @@ function App() {
   const [history, setHistory] = useState<Completion[]>([])
   const [notes, setNotes] = useState<HouseholdNote[]>([])
   const [aquarium, setAquarium] = useState<AquariumData | null>(null)
+  const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings)
   const [today, setToday] = useState<TodayState>({ due: [], overdue: [], completedToday: [] })
   const [loadState, setLoadState] = useState<LoadState>('idle')
   const [error, setError] = useState('')
@@ -389,6 +398,10 @@ function App() {
   const [panicModalOpen, setPanicModalOpen] = useState(false)
   const [panicError, setPanicError] = useState('')
   const [panicSubmitting, setPanicSubmitting] = useState(false)
+  const [goodPinEntry, setGoodPinEntry] = useState('')
+  const [goodModalOpen, setGoodModalOpen] = useState(false)
+  const [goodError, setGoodError] = useState('')
+  const [goodSubmitting, setGoodSubmitting] = useState(false)
   const [textModeSubmitting, setTextModeSubmitting] = useState(false)
   const [localFishTextActiveUntil, setLocalFishTextActiveUntil] = useState<string | null>(null)
   const [adminMembers, setAdminMembers] = useState<Member[]>([])
@@ -432,6 +445,7 @@ function App() {
     : selectedMember
       ? displayFamilyMemberPublic(selectedMember)
       : 'Login'
+  const testMode = appSettings.test_mode === 1
   const setupMember = session?.mode === 'kiosk' ? kioskMember : selectedMember
   const canAccessSetup = setupMember?.member_type === 'adult'
 
@@ -469,13 +483,14 @@ function App() {
     setError('')
 
     try {
-      const [memberData, choreData, todayData, noteData, historyData, aquariumData] = await Promise.all([
+      const [memberData, choreData, todayData, noteData, historyData, aquariumData, settingsData] = await Promise.all([
         api<{ ok: boolean; members: Member[] }>('/api/members'),
         api<{ ok: boolean; chores: Chore[] }>('/api/chores'),
         api<TodayState & { ok: boolean }>('/api/today'),
         api<{ ok: boolean; notes: HouseholdNote[] }>('/api/notes'),
         api<{ ok: boolean; completions: Completion[] }>('/api/completions/recent'),
         api<{ ok: boolean; aquarium: AquariumData }>('/api/aquarium'),
+        api<{ ok: boolean; settings: AppSettings }>('/api/settings'),
       ])
 
       setMembers(memberData.members)
@@ -488,6 +503,7 @@ function App() {
       setNotes(noteData.notes)
       setHistory(historyData.completions)
       setAquarium(aquariumData.aquarium)
+      setAppSettings(settingsData.settings)
 
       const activeMemberIds = new Set(memberData.members.map((member) => member.id))
 
@@ -938,6 +954,23 @@ function App() {
     }
   }
 
+  async function saveTestMode(enabled: boolean) {
+    setError('')
+
+    try {
+      const data = await api<{ ok: boolean; settings: AppSettings }>('/api/admin/settings', {
+        method: 'PUT',
+        headers: { 'X-Parent-Pin': adminPin },
+        body: JSON.stringify({ test_mode: enabled ? 1 : 0 }),
+      })
+      setAppSettings(data.settings)
+      setSuccessMessage(data.settings.test_mode ? 'Test mode on.' : 'Test mode off.')
+      await refreshHousehold(true)
+    } catch (currentError) {
+      setError(currentError instanceof Error ? currentError.message : 'Could not save test mode.')
+    }
+  }
+
   async function submitPanic(pin: string, isActive: boolean) {
     setPanicError('')
     setPanicSubmitting(true)
@@ -953,6 +986,25 @@ function App() {
       setPanicError('Wrong PIN or something went wrong.')
     } finally {
       setPanicSubmitting(false)
+    }
+  }
+
+  async function submitEverythingGood(pin: string) {
+    setGoodError('')
+    setGoodSubmitting(true)
+    try {
+      await api('/api/admin/aquarium-everything-good', {
+        method: 'POST',
+        headers: { 'X-Parent-Pin': pin },
+      })
+      setGoodModalOpen(false)
+      setGoodPinEntry('')
+      setSuccessMessage('Everything good. The fish will stay happy for 4 hours.')
+      await refreshHousehold()
+    } catch {
+      setGoodError('Wrong PIN or something went wrong.')
+    } finally {
+      setGoodSubmitting(false)
     }
   }
 
@@ -1028,12 +1080,16 @@ function App() {
         <nav aria-label="Main navigation">
           <button type="button" onClick={() => navigate('/aquarium')}>Aquarium</button>
           <button type="button" onClick={() => navigate('/aquarium-friends')}>Friends</button>
+          <button type="button" onClick={() => navigate('/story')}>Story</button>
           <button type="button" onClick={() => navigate('/display')}>Household</button>
           <button type="button" onClick={openDeviceView}>{deviceViewLabel}</button>
           <button type="button" onClick={() => navigate('/bug-box')}>Bug Box</button>
           {canAccessSetup && <button type="button" onClick={() => navigate('/admin')}>Setup</button>}
         </nav>
-        <span className="idle-countdown" aria-live="polite">{currentLoginLabel}</span>
+        <div className="header-status">
+          {testMode && <span className="test-mode-badge">Test mode</span>}
+          <span className="idle-countdown" aria-live="polite">{currentLoginLabel}</span>
+        </div>
       </header>
 
       {loadState === 'loading' && <p className="notice">Loading household data...</p>}
@@ -1052,10 +1108,15 @@ function App() {
           onRecord={() => navigate('/choose-mode')}
           onFriends={() => navigate('/aquarium-friends')}
           onPanic={() => { setPanicPinEntry(''); setPanicError(''); setPanicModalOpen(true) }}
+          onEverythingGood={() => { setGoodPinEntry(''); setGoodError(''); setGoodModalOpen(true) }}
           onTextMode={() => void textCurrentAquariumMode()}
+          onDebug={() => navigate('/aquarium-debug')}
           textModeSubmitting={textModeSubmitting}
+          testMode={testMode}
         />
       )}
+
+      {route === '/aquarium-debug' && <AquariumMoodDebugView aquarium={aquarium} />}
 
       {route === '/aquarium-friends' && <AquariumFriendsView aquarium={aquarium} />}
 
@@ -1222,6 +1283,14 @@ function App() {
 
       {route === '/history' && <HistoryView history={history} members={members} chores={chores} />}
 
+      {route === '/story' && (
+        <ComicView apiBaseUrl={apiBaseUrl} members={members} initialViewerId={selectedMemberId} />
+      )}
+
+      {route === '/scene-stepper' && canAccessSetup && (
+        <SceneStepper apiBaseUrl={apiBaseUrl} onExit={() => navigate('/admin')} />
+      )}
+
       {route === '/bug-box' && (
         <BugBoxView
           members={members}
@@ -1235,6 +1304,12 @@ function App() {
       )}
 
       {route === '/admin' && canAccessSetup && (
+        <div className="scene-stepper-entry">
+          <button type="button" onClick={() => navigate('/scene-stepper')}>🎬 Scene Stepper (test)</button>
+        </div>
+      )}
+
+      {route === '/admin' && canAccessSetup && (
         <AdminView
           pin={adminPin}
           unlocked={adminUnlocked}
@@ -1244,6 +1319,7 @@ function App() {
           choreDraft={choreDraft}
           noteDraft={noteDraft}
           aquariumConfigDraft={aquariumConfigDraft}
+          appSettings={appSettings}
           notes={adminNotes}
           onPinChange={setAdminPin}
           onUnlock={() => void unlockAdmin()}
@@ -1257,6 +1333,7 @@ function App() {
           onDeleteChore={(chore) => void deleteChore(chore)}
           onSaveNote={() => void saveNote()}
           onSaveAquariumConfig={() => void saveAquariumConfig()}
+          onTestModeChange={(enabled) => void saveTestMode(enabled)}
           onExport={() => void exportHouseholdData()}
         />
       )}
@@ -1307,7 +1384,194 @@ function App() {
           </div>
         </div>
       )}
+
+      {goodModalOpen && (
+        <div className="modal-overlay" onClick={() => setGoodModalOpen(false)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+            <h2>✅ Everything good</h2>
+            <p>Enter your parent PIN to make the fish happy for 4 hours.</p>
+            <input
+              type="password"
+              inputMode="numeric"
+              placeholder="Parent PIN"
+              value={goodPinEntry}
+              className="pin-input"
+              autoFocus
+              onChange={(e) => { setGoodPinEntry(e.target.value); setGoodError('') }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && goodPinEntry) void submitEverythingGood(goodPinEntry) }}
+            />
+            {goodError && <p className="notice error">{goodError}</p>}
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="primary-action"
+                disabled={!goodPinEntry || goodSubmitting}
+                onClick={() => void submitEverythingGood(goodPinEntry)}
+              >
+                {goodSubmitting ? 'Saving…' : 'Make fish happy'}
+              </button>
+              <button type="button" className="secondary-action" onClick={() => setGoodModalOpen(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
+  )
+}
+
+function AquariumMoodDebugView({ aquarium }: { aquarium: AquariumData | null }) {
+  const debug = aquarium?.moodDebug
+
+  if (!aquarium || !debug) {
+    return (
+      <section className="screen aquarium-debug-screen">
+        <div className="screen-heading">
+          <p className="eyebrow">Family Aquarium</p>
+          <h1>Fish mood math</h1>
+        </div>
+        <section className="panel">
+          <p>Loading fish mood details...</p>
+        </section>
+      </section>
+    )
+  }
+
+  const finalScore = debug.rules.mood_rank[debug.mood.final]
+  const baseScore = debug.rules.mood_rank[debug.mood.base]
+  const capScore = debug.mood.participation_ceiling ? debug.rules.mood_rank[debug.mood.participation_ceiling] : null
+  const countedRows = debug.counted_completions.map((completion) => ({
+    label: `${completion.chore_name} by ${completion.member_name}`,
+    value: 1,
+    detail: `Completed ${formatTime(completion.completed_at)}`,
+  }))
+  const ignoredRows = debug.ignored_completions.map((completion) => ({
+    label: `${completion.chore_name} by ${completion.member_name}`,
+    value: 0,
+    detail: completion.member_type !== 'child' ? 'Ignored because this was an adult completion.' : 'Ignored because this chore does not feed the aquarium.',
+  }))
+
+  return (
+    <section className="screen aquarium-debug-screen">
+      <div className="screen-heading">
+        <p className="eyebrow">Family Aquarium</p>
+        <h1>Fish mood math</h1>
+      </div>
+
+      <section className="panel aquarium-debug-total">
+        <div>
+          <span>Final mood</span>
+          <strong>{moodText(debug.mood.final)}</strong>
+        </div>
+        <div>
+          <span>Final score</span>
+          <strong>{finalScore}</strong>
+        </div>
+      </section>
+
+      <section className="panel">
+        <h2>Today&apos;s counted chores</h2>
+        <div className="debug-equation">
+          {countedRows.length === 0 && (
+            <div className="debug-equation-row">
+              <span>No fish-feeding child chores today</span>
+              <strong>+0</strong>
+            </div>
+          )}
+          {countedRows.map((row) => (
+            <div key={`${row.label}-${row.detail}`} className="debug-equation-row">
+              <span>
+                {row.label}
+                <small>{row.detail}</small>
+              </span>
+              <strong>+{row.value}</strong>
+            </div>
+          ))}
+          <div className="debug-equation-rule" />
+          <div className="debug-equation-row total">
+            <span>Child fish-feeding chore count</span>
+            <strong>{debug.participation.todayChildCount}</strong>
+          </div>
+          <div className="debug-equation-row">
+            <span>Base mood from chore count</span>
+            <strong>{moodText(debug.mood.base)} ({baseScore})</strong>
+          </div>
+        </div>
+      </section>
+
+      <section className="panel">
+        <h2>Caps and overrides</h2>
+        <div className="debug-equation">
+          <div className="debug-equation-row">
+            <span>
+              Distinct children who helped
+              <small>
+                {debug.participation.todayDistinctChildCount} of {debug.participation.activeChildCount} active children
+              </small>
+            </span>
+            <strong>{debug.mood.participation_ceiling ? `${moodText(debug.mood.participation_ceiling)} (${capScore})` : 'No cap'}</strong>
+          </div>
+          <div className="debug-equation-row">
+            <span>Final mood after caps and overrides</span>
+            <strong>{moodText(debug.mood.final)} ({finalScore})</strong>
+          </div>
+          <div className="debug-equation-row">
+            <span>Everything good override</span>
+            <strong>{debug.overrides.everything_good_active ? `Active until ${formatTime(debug.overrides.everything_good_until ?? '')}` : 'Inactive'}</strong>
+          </div>
+          <div className="debug-equation-row">
+            <span>Panic override</span>
+            <strong>{debug.overrides.panic_active ? `Active, ${debug.overrides.panic_chores_needed} chores needed` : 'Inactive'}</strong>
+          </div>
+        </div>
+      </section>
+
+      <section className="panel">
+        <h2>Time window</h2>
+        <div className="debug-info-grid">
+          <span>Household day</span>
+          <strong>{debug.today.date}</strong>
+          <span>Counting from</span>
+          <strong>{formatCompactDateTime(new Date(`${debug.today.start}Z`))}</strong>
+          <span>Counting until</span>
+          <strong>{formatCompactDateTime(new Date(`${debug.today.end}Z`))}</strong>
+          <span>Last fed</span>
+          <strong>{debug.last_fed_at ? `${debug.hours_since_fed} hours ago` : 'Never'}</strong>
+        </div>
+      </section>
+
+      {ignoredRows.length > 0 && (
+        <section className="panel">
+          <h2>Ignored today</h2>
+          <div className="debug-equation">
+            {ignoredRows.map((row) => (
+              <div key={`${row.label}-${row.detail}`} className="debug-equation-row muted">
+                <span>
+                  {row.label}
+                  <small>{row.detail}</small>
+                </span>
+                <strong>{row.value}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="panel">
+        <h2>Range</h2>
+        <div className="debug-range-grid">
+          {Object.entries(debug.rules.mood_rank)
+            .sort((left, right) => left[1] - right[1])
+            .map(([mood, score]) => (
+              <span key={mood}>
+                <strong>{score}</strong>
+                {moodText(mood as AquariumData['state']['mood'])}
+              </span>
+            ))}
+        </div>
+      </section>
+    </section>
   )
 }
 
@@ -1841,6 +2105,7 @@ function AdminView({
   choreDraft,
   noteDraft,
   aquariumConfigDraft,
+  appSettings,
   notes,
   onPinChange,
   onUnlock,
@@ -1854,6 +2119,7 @@ function AdminView({
   onDeleteChore,
   onSaveNote,
   onSaveAquariumConfig,
+  onTestModeChange,
   onExport,
 }: {
   pin: string
@@ -1864,6 +2130,7 @@ function AdminView({
   choreDraft: ChoreDraft
   noteDraft: NoteDraft
   aquariumConfigDraft: AquariumConfigDraft
+  appSettings: AppSettings
   notes: HouseholdNote[]
   onPinChange: (pin: string) => void
   onUnlock: () => void
@@ -1877,9 +2144,10 @@ function AdminView({
   onDeleteChore: (chore: Chore) => void
   onSaveNote: () => void
   onSaveAquariumConfig: () => void
+  onTestModeChange: (enabled: boolean) => void
   onExport: () => void
 }) {
-  const [section, setSection] = useState<'menu' | 'members' | 'chores' | 'notes' | 'aquarium' | 'backup'>('menu')
+  const [section, setSection] = useState<'menu' | 'members' | 'chores' | 'notes' | 'aquarium' | 'settings' | 'backup'>('menu')
   const activeMembers = members.filter((member) => member.active === 1)
 
   function updateChoreAssignmentMode(assignment_mode: AssignmentMode) {
@@ -1956,6 +2224,10 @@ function AdminView({
           <button type="button" onClick={() => setSection('aquarium')}>
             <strong>Aquarium</strong>
             <span>Tune food, eggs, milestones, and growth timing.</span>
+          </button>
+          <button type="button" onClick={() => setSection('settings')}>
+            <strong>Settings</strong>
+            <span>Turn test mode on or off.</span>
           </button>
         </div>
       </section>
@@ -2116,6 +2388,23 @@ function AdminView({
             </div>
           </section>
         </>
+      )}
+
+      {section === 'settings' && (
+        <section className="panel setup-form-panel">
+          <h2>Test mode</h2>
+          <label className="check-row test-mode-toggle">
+            <input
+              type="checkbox"
+              checked={appSettings.test_mode === 1}
+              onChange={(event) => onTestModeChange(event.target.checked)}
+            />
+            <span>
+              Test mode
+              <small>Shows test controls and sends fish texts to the test number.</small>
+            </span>
+          </label>
+        </section>
       )}
 
       {section === 'chores' && (
@@ -2622,11 +2911,17 @@ function frequencyLabel(frequency: FrequencyType) {
   return frequency[0].toUpperCase() + frequency.slice(1)
 }
 
-function setupSectionTitle(section: 'menu' | 'members' | 'chores' | 'notes' | 'aquarium' | 'backup') {
+function moodText(mood: AquariumData['state']['mood']) {
+  if (mood === 'very_hungry') return 'Very hungry'
+  return mood[0].toUpperCase() + mood.slice(1)
+}
+
+function setupSectionTitle(section: 'menu' | 'members' | 'chores' | 'notes' | 'aquarium' | 'settings' | 'backup') {
   if (section === 'members') return 'Manage family members'
   if (section === 'chores') return 'Manage chores'
   if (section === 'notes') return 'Manage notes'
   if (section === 'aquarium') return 'Tune aquarium'
+  if (section === 'settings') return 'Settings'
   if (section === 'backup') return 'Backup'
   return 'What do you want to manage?'
 }

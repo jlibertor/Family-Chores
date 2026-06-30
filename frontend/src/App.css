@@ -91,6 +91,26 @@ button:focus-visible {
   padding: 8px 12px;
 }
 
+.header-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.test-mode-badge {
+  min-height: 36px;
+  border: 1px solid #f59e0b;
+  border-radius: 999px;
+  background: #fef3c7;
+  color: #92400e;
+  padding: 7px 12px;
+  font-size: 0.9rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
 .idle-countdown {
   min-height: 36px;
   border: 1px solid var(--border);
@@ -101,6 +121,16 @@ button:focus-visible {
   font-size: 0.9rem;
   font-weight: 900;
   white-space: nowrap;
+}
+
+.test-mode-toggle span {
+  display: grid;
+  gap: 3px;
+}
+
+.test-mode-toggle small {
+  color: var(--muted);
+  font-weight: 600;
 }
 
 .screen {
@@ -308,6 +338,7 @@ button:focus-visible {
   isolation: isolate;
 }
 
+.aquarium-mood-peckish .aquarium-tank,
 .aquarium-mood-hungry .aquarium-tank,
 .aquarium-mood-very_hungry .aquarium-tank {
   background:
@@ -437,6 +468,30 @@ button:focus-visible {
   animation-delay: -2.1s;
 }
 
+.leafy-plant {
+  position: absolute;
+  z-index: 3;
+  bottom: 8%;
+  height: 60%;
+  width: auto;
+  aspect-ratio: 180 / 380;
+  pointer-events: none;
+  transform-origin: bottom center;
+  animation: leafy-plant-sway 6.2s ease-in-out infinite alternate;
+}
+
+.leafy-plant-tall {
+  left: 0;
+}
+
+.leafy-plant-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  filter: drop-shadow(0 6px 10px rgb(8 47 24 / 0.25));
+}
+
 .bubble-stream,
 .aquarium-burst-bubble,
 .aquarium-random-bubble,
@@ -521,13 +576,12 @@ button:focus-visible {
 
 .aquarium-food-particle {
   z-index: 6;
-  width: 10px;
-  height: 10px;
+  opacity: 0;
   border: 1px solid #854d0e;
-  border-radius: 50%;
-  background: #facc15;
-  box-shadow: 0 0 8px rgb(250 204 21 / 0.72);
-  animation: food-drop 4.2s ease-in forwards;
+  border-radius: 2px;
+  background: #fbbf24;
+  box-shadow: 0 0 6px rgb(250 204 21 / 0.72);
+  animation: food-drop 3.9s ease-in both;
 }
 
 .aquarium-creature {
@@ -546,6 +600,13 @@ button:focus-visible {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+.aquarium-creature-art {
+  width: 100%;
+  height: 100%;
+  transform-origin: center;
+  will-change: transform;
 }
 
 .aquarium-phone-bubble {
@@ -614,8 +675,8 @@ button:focus-visible {
   position: absolute;
   top: 0;
   left: 23px;
-  width: 2px;
-  height: calc(100% - 44px);
+  width: 1.5px;
+  height: calc(100% - 48px);
   min-height: 0;
   border-radius: 999px;
   background: linear-gradient(180deg, rgb(226 232 240 / 0.78), rgb(100 116 139 / 0.88));
@@ -624,10 +685,10 @@ button:focus-visible {
 
 .fish-hook-art {
   position: absolute;
-  right: -3px;
+  right: -5px;
   bottom: -1px;
-  width: 52px;
-  height: 62px;
+  width: 56px;
+  height: 68px;
   overflow: visible;
   filter: drop-shadow(0 3px 4px rgb(15 23 42 / 0.18));
 }
@@ -640,23 +701,58 @@ button:focus-visible {
   stroke: #1f2937;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 5.4;
+  stroke-width: 3.8;
 }
 
 .fish-hook-point,
 .fish-hook-barb {
-  stroke-width: 4.6;
+  stroke-width: 3.1;
 }
 
 .fish-hook-eye {
   fill: #e2e8f0;
   stroke: #1f2937;
-  stroke-width: 3.5;
+  stroke-width: 2.5;
 }
 
 .fish-hook-glint {
   fill: #f8fafc;
   opacity: 0.88;
+}
+
+.fish-hook-worm {
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.aquarium-fish-hook.baited .fish-hook-worm {
+  opacity: 1;
+}
+
+.worm-body {
+  fill: none;
+  stroke: #fda4af;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 5;
+}
+
+.worm-face {
+  fill: #fda4af;
+  stroke: #fda4af;
+  stroke-width: 1.3;
+}
+
+.worm-eye {
+  fill: #292524;
+}
+
+.worm-smile {
+  fill: none;
+  stroke: #292524;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.2;
 }
 
 .phone-bubble-shell {
@@ -797,6 +893,21 @@ button:focus-visible {
   font-size: clamp(2rem, 4vw, 3rem);
 }
 
+.aquarium-mood-happy .aquarium-summary h1,
+.aquarium-mood-content .aquarium-summary h1 {
+  color: #0f766e;
+}
+
+.aquarium-mood-peckish .aquarium-summary h1,
+.aquarium-mood-hungry .aquarium-summary h1 {
+  color: #c2410c;
+}
+
+.aquarium-mood-very_hungry .aquarium-summary h1,
+.aquarium-mood-sad .aquarium-summary h1 {
+  color: #b91c1c;
+}
+
 .aquarium-card-heading {
   display: flex;
   flex-wrap: wrap;
@@ -822,7 +933,7 @@ button:focus-visible {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #22c55e, #facc15, #fb923c);
+  background: linear-gradient(90deg, #38bdf8, #14b8a6);
   transition: width 420ms ease;
 }
 
@@ -939,6 +1050,147 @@ button:focus-visible {
   text-transform: lowercase;
 }
 
+.aquarium-debug-link {
+  min-height: 34px;
+  border-color: transparent;
+  background: transparent;
+  color: #0f766e;
+  padding: 6px 8px;
+  font-size: 0.9rem;
+  text-decoration: underline;
+}
+
+.aquarium-debug-screen {
+  max-width: 860px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.aquarium-debug-total {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.aquarium-debug-total div {
+  display: grid;
+  gap: 4px;
+}
+
+.aquarium-debug-total span,
+.debug-info-grid span {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.aquarium-debug-total strong {
+  color: var(--heading);
+  font-size: 1.8rem;
+}
+
+.debug-equation {
+  display: grid;
+  gap: 8px;
+}
+
+.debug-equation-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--soft);
+  padding: 10px 12px;
+}
+
+.debug-equation-row span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  color: var(--heading);
+  font-weight: 800;
+}
+
+.debug-equation-row small {
+  color: var(--muted);
+  font-weight: 650;
+}
+
+.debug-equation-row strong {
+  color: var(--heading);
+  white-space: nowrap;
+}
+
+.debug-equation-row.total {
+  border-color: #99f6e4;
+  background: #ecfeff;
+}
+
+.debug-equation-row.muted {
+  opacity: 0.86;
+}
+
+.debug-equation-rule {
+  height: 2px;
+  background: var(--border);
+}
+
+.debug-info-grid,
+.debug-range-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.debug-info-grid {
+  grid-template-columns: minmax(120px, auto) minmax(0, 1fr);
+  align-items: center;
+}
+
+.debug-info-grid strong {
+  overflow-wrap: anywhere;
+}
+
+.debug-range-grid {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.debug-range-grid span {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--soft);
+  padding: 10px 12px;
+  font-weight: 800;
+}
+
+.debug-range-grid strong {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: #ccfbf1;
+  color: #115e59;
+}
+
+.aquarium-test-actions {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 9;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.aquarium-test-actions button {
+  min-height: 34px;
+  padding: 6px 14px;
+  font-size: 0.82rem;
+}
+
 .aquarium-friends-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
@@ -993,6 +1245,16 @@ button:focus-visible {
 
   to {
     transform: rotate(7deg);
+  }
+}
+
+@keyframes leafy-plant-sway {
+  from {
+    transform: rotate(-2deg);
+  }
+
+  to {
+    transform: rotate(3deg);
   }
 }
 
@@ -1099,7 +1361,7 @@ button:focus-visible {
 @keyframes food-drop {
   0% {
     opacity: 0;
-    transform: translate3d(-50%, 0, 0) scale(0.65);
+    transform: translate3d(-50%, 0, 0) scale(0.7);
   }
 
   15% {
@@ -1108,12 +1370,12 @@ button:focus-visible {
 
   82% {
     opacity: 1;
-    transform: translate3d(-50%, var(--food-target-y), 0) scale(1);
+    transform: translate3d(calc(-50% + var(--food-drift-x)), var(--food-target-y), 0) scale(1);
   }
 
   100% {
     opacity: 0;
-    transform: translate3d(-50%, var(--food-target-y), 0) scale(0.2);
+    transform: translate3d(calc(-50% + var(--food-drift-x)), var(--food-target-y), 0) scale(0.2);
   }
 }
 
@@ -1661,6 +1923,7 @@ button:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .leafy-plant,
   .seaweed span,
   .bubble-stream span,
   .aquarium-burst-bubble,
@@ -2204,4 +2467,261 @@ button:focus-visible {
   text-align: center;
   letter-spacing: 0.25em;
   box-sizing: border-box;
+}
+
+/* ---- Story / comic view ---------------------------------------------- */
+.comic-view {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 0.5rem 1rem 2rem;
+}
+.comic-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.comic-eyebrow {
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+.comic-title {
+  margin: 0.1rem 0 0;
+  font-size: 1.6rem;
+}
+.comic-viewer-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.comic-viewer-chip {
+  border: 1px solid rgba(125, 211, 252, 0.4);
+  background: transparent;
+  color: inherit;
+  border-radius: 999px;
+  padding: 0.3rem 0.8rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.comic-viewer-chip.is-active {
+  background: #38bdf8;
+  border-color: #38bdf8;
+  color: #06283d;
+  font-weight: 600;
+}
+.comic-progress {
+  margin: 0.6rem 0 1rem;
+  font-size: 0.85rem;
+  opacity: 0.7;
+}
+.comic-empty,
+.comic-error {
+  padding: 1.5rem;
+  text-align: center;
+  opacity: 0.8;
+}
+.comic-error { color: #fca5a5; }
+
+.comic-panel {
+  background: linear-gradient(180deg, #0b2a45 0%, #07344f 100%);
+  border: 1px solid rgba(125, 211, 252, 0.25);
+  border-radius: 18px;
+  padding: 1.25rem;
+  box-shadow: 0 14px 40px rgba(2, 16, 33, 0.45);
+}
+.comic-panel-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+}
+.comic-panel-heading h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+.comic-scene-number {
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  background: rgba(56, 189, 248, 0.18);
+  color: #7dd3fc;
+  border-radius: 6px;
+  padding: 0.2rem 0.5rem;
+}
+.comic-setting {
+  font-size: 0.8rem;
+  font-style: italic;
+  opacity: 0.65;
+}
+.comic-stage {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  align-items: end;
+  gap: 0.5rem;
+  min-height: 96px;
+  padding: 0.5rem 0 0.75rem;
+}
+.comic-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+}
+.comic-slot-left { align-self: end; }
+.comic-slot-right { align-self: end; }
+.comic-portrait {
+  width: 84px;
+  height: 84px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.comic-portrait svg { width: 100%; height: 100%; }
+.comic-name {
+  font-size: 0.8rem;
+  font-weight: 600;
+  opacity: 0.9;
+}
+.comic-narration {
+  margin: 0.25rem 0 1rem;
+  padding: 0.6rem 0.85rem;
+  background: rgba(2, 16, 33, 0.5);
+  border-left: 3px solid #7dd3fc;
+  border-radius: 8px;
+  font-style: italic;
+  font-size: 0.92rem;
+}
+.comic-dialogue {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.comic-bubble {
+  background: #f8fafc;
+  color: #0f172a;
+  border-radius: 14px;
+  padding: 0.55rem 0.8rem;
+  max-width: 88%;
+  box-shadow: 0 2px 8px rgba(2, 16, 33, 0.3);
+}
+.comic-bubble p { margin: 0.1rem 0 0; font-size: 0.95rem; }
+.comic-bubble-right { align-self: flex-end; background: #e0f2fe; }
+.comic-bubble-center { align-self: center; }
+.comic-bubble-name {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #0369a1;
+}
+.comic-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+.comic-nav-button {
+  border: 1px solid rgba(125, 211, 252, 0.4);
+  background: transparent;
+  color: inherit;
+  border-radius: 10px;
+  padding: 0.45rem 0.9rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.comic-nav-button:disabled { opacity: 0.35; cursor: default; }
+.comic-nav-count { font-size: 0.82rem; opacity: 0.6; }
+.comic-footer { margin-top: 0.9rem; }
+.comic-unlock-hint {
+  margin: 0;
+  text-align: center;
+  padding: 0.8rem;
+  border-radius: 12px;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px dashed rgba(125, 211, 252, 0.5);
+  font-size: 0.92rem;
+}
+.comic-caught-up {
+  background: rgba(74, 222, 128, 0.12);
+  border-color: rgba(134, 239, 172, 0.5);
+}
+
+
+/* ---- Story props, silhouettes, scene stepper ------------------------- */
+.comic-prop {
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.8rem;
+  background: rgba(250, 204, 21, 0.12);
+  border: 1px dashed rgba(250, 204, 21, 0.5);
+  border-radius: 10px;
+  font-size: 0.86rem;
+  font-style: italic;
+}
+.comic-silhouette {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 38%, #1f2937 0%, #0b1220 100%);
+  color: #94a3b8;
+  font-weight: 700;
+  font-size: 1.6rem;
+}
+.scene-stepper-entry {
+  max-width: 760px;
+  margin: 0.75rem auto;
+  text-align: center;
+}
+.scene-stepper-entry button {
+  border: 1px solid rgba(125, 211, 252, 0.4);
+  background: rgba(56, 189, 248, 0.1);
+  color: inherit;
+  border-radius: 10px;
+  padding: 0.5rem 0.9rem;
+  cursor: pointer;
+}
+.scene-stepper {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 0.5rem 1rem 2rem;
+}
+.scene-stepper-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.scene-stepper-title {
+  font-size: 0.85rem;
+  opacity: 0.7;
+}
+.scene-stepper-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+.scene-stepper-slider {
+  flex: 1;
+}
+.scene-stepper-count {
+  font-size: 0.82rem;
+  opacity: 0.6;
+  min-width: 56px;
+  text-align: right;
+}
+.scene-stepper-hint {
+  margin-top: 0.6rem;
+  text-align: center;
+  font-size: 0.8rem;
+  opacity: 0.6;
 }

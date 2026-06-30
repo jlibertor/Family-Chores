@@ -13,7 +13,7 @@ crons = ["0 * * * *"]
 
 [vars]
 SMS_ENABLED = "true"
-SMS_TEST_MODE = "true"
+SMS_TEST_MODE = "false"
 SMS_TEST_NUMBER = "+13105035221"
 ALERTING_FROM_PHONE_NUMBER = "+13105934267"
 
@@ -23,7 +23,6 @@ ALERTING_FROM_PHONE_NUMBER = "+13105934267"
 # wrangler secret put TWILIO_ACCOUNT_SID
 # wrangler secret put TWILIO_AUTH_TOKEN
 #
-# Keep SMS_TEST_MODE=true during development. Test mode always sends to
-# SMS_TEST_NUMBER and bypasses per-member fish text windows. When production
-# rollout is ready, set SMS_TEST_MODE=false and configure per-member phone
-# numbers, fish text opt-ins, and text windows in Parent setup.
+# Production keeps SMS_TEST_MODE=false so messages use per-member phone
+# numbers, fish text opt-ins, and text windows from Parent setup. For local
+# SMS testing, temporarily set SMS_TEST_MODE=true in a local-only config.
