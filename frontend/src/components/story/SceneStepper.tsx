@@ -8,12 +8,14 @@ type SceneStepperProps = {
 
 type AllScenesData = {
   ok: boolean
-  series: { slug: string; title: string; total_scenes: number } | null
+  series: { slug: string; title: string; total_scenes: number; status?: string } | null
+  seriesList: Array<{ slug: string; title: string; total_scenes: number; status: string }>
   scenes: StoryScene[]
 }
 
 export function SceneStepper({ apiBaseUrl, onExit }: SceneStepperProps) {
   const [data, setData] = useState<AllScenesData | null>(null)
+  const [selectedSlug, setSelectedSlug] = useState('')
   const [index, setIndex] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -22,7 +24,8 @@ export function SceneStepper({ apiBaseUrl, onExit }: SceneStepperProps) {
     setLoading(true)
     setError('')
     try {
-      const response = await fetch(`${apiBaseUrl}/api/story/scenes`)
+      const query = selectedSlug ? `?slug=${encodeURIComponent(selectedSlug)}` : ''
+      const response = await fetch(`${apiBaseUrl}/api/story/scenes${query}`)
       const body = (await response.json()) as AllScenesData & { error?: string }
       if (!response.ok) throw new Error(body.error ?? 'Could not load scenes.')
       setData(body)
@@ -32,7 +35,7 @@ export function SceneStepper({ apiBaseUrl, onExit }: SceneStepperProps) {
     } finally {
       setLoading(false)
     }
-  }, [apiBaseUrl])
+  }, [apiBaseUrl, selectedSlug])
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -61,6 +64,19 @@ export function SceneStepper({ apiBaseUrl, onExit }: SceneStepperProps) {
           &lsaquo; Back to Setup
         </button>
         <span className="scene-stepper-title">{data?.series?.title ?? 'Scenes'} — test stepper</span>
+        <select
+          className="scene-stepper-select"
+          value={data?.series?.slug ?? selectedSlug}
+          onChange={(event) => setSelectedSlug(event.target.value)}
+          aria-label="Preview story"
+          disabled={!data?.seriesList.length}
+        >
+          {(data?.seriesList ?? []).map((series) => (
+            <option key={series.slug} value={series.slug}>
+              {series.title} ({series.status}, {series.total_scenes} scenes)
+            </option>
+          ))}
+        </select>
         <button type="button" className="comic-nav-button" onClick={() => void load()}>
           Reload
         </button>
@@ -68,7 +84,7 @@ export function SceneStepper({ apiBaseUrl, onExit }: SceneStepperProps) {
 
       {loading && <p className="comic-empty">Loading scenes…</p>}
       {error && <p className="comic-error">{error}</p>}
-      {!loading && !error && count === 0 && <p className="comic-empty">No scenes found for the active series.</p>}
+      {!loading && !error && count === 0 && <p className="comic-empty">No scenes found for this story.</p>}
 
       {!loading && !error && scene && (
         <>

@@ -3112,7 +3112,7 @@ async function recordCompletion(request: Request, env: Env, ctx: ExecutionContex
     );
   }
 
-  const storyUnlock = await unlockNextStoryScene(db, memberId).catch((error) => {
+  const storyUnlock = await unlockStoryScenesForDailyChildChores(db).catch((error) => {
     console.error("Story unlock failed", error);
     return null;
   });
@@ -3709,6 +3709,13 @@ async function getStorySceneRows(db: D1Database, seriesId: number): Promise<Stor
   return results ?? [];
 }
 
+async function getStorySeriesRows(db: D1Database): Promise<StorySeriesRow[]> {
+  const { results } = await db
+    .prepare("SELECT id, slug, title, total_scenes, start_date, status FROM story_series ORDER BY status = 'active' DESC, id")
+    .all<StorySeriesRow>();
+  return results ?? [];
+}
+
 async function getMemberUnlockedIndex(db: D1Database, memberId: number, seriesId: number): Promise<number> {
   const row = await db
     .prepare("SELECT unlocked_index FROM story_progress WHERE member_id = ? AND series_id = ?")
@@ -3729,6 +3736,21 @@ function countReleasedScenes(scenes: StorySceneRow[], daysSinceStart: number): n
   return scenes.filter((scene) => scene.release_offset_days <= daysSinceStart).length;
 }
 
+async function countChildChoresToday(db: D1Database, calendar: HouseholdCalendar): Promise<number> {
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) AS completed_count
+       FROM chore_completions cc
+       JOIN family_members fm ON fm.id = cc.completed_by_member_id
+       WHERE fm.member_type = 'child'
+        AND cc.completed_at >= ?
+        AND cc.completed_at < ?`,
+    )
+    .bind(calendar.todayStart, calendar.todayEnd)
+    .first<{ completed_count: number }>();
+  return Number(row?.completed_count ?? 0);
+}
+
 async function getStoryForMember(db: D1Database, memberId: number | null) {
   const series = await getActiveStorySeries(db);
   if (!series) {
@@ -3746,13 +3768,9 @@ async function getStoryForMember(db: D1Database, memberId: number | null) {
 
   const calendar = getHouseholdCalendar();
   const scenes = await getStorySceneRows(db, series.id);
-  const daysSinceStart = daysBetween(series.start_date, calendar.todayDate);
-  const releasedCount = countReleasedScenes(scenes, daysSinceStart);
-  const unlocked = memberId ? await getMemberUnlockedIndex(db, memberId, series.id) : releasedCount;
+  const releasedCount = scenes.length;
+  const unlocked = memberId ? await getMemberUnlockedIndex(db, memberId, series.id) : 1;
   const accessibleCount = Math.min(releasedCount, Math.max(unlocked, 1));
-
-  const nextUnreleased = scenes.find((scene) => scene.release_offset_days > daysSinceStart);
-  const nextReleaseDate = nextUnreleased ? addDaysToDate(series.start_date, nextUnreleased.release_offset_days) : null;
 
   const accessibleScenes = scenes.slice(0, accessibleCount).map((scene) => ({
     scene_order: scene.scene_order,
@@ -3767,56 +3785,76 @@ async function getStoryForMember(db: D1Database, memberId: number | null) {
     releasedCount,
     accessibleCount,
     totalScenes: scenes.length,
-    nextReleaseDate,
+    nextReleaseDate: null,
     canUnlockMore: accessibleCount < releasedCount,
     scenes: accessibleScenes,
   };
 }
 
-async function unlockNextStoryScene(db: D1Database, memberId: number) {
+async function unlockStoryScenesForDailyChildChores(db: D1Database) {
   const series = await getActiveStorySeries(db);
   if (!series) return null;
 
   const calendar = getHouseholdCalendar();
   const scenes = await getStorySceneRows(db, series.id);
-  const daysSinceStart = daysBetween(series.start_date, calendar.todayDate);
-  const releasedCount = countReleasedScenes(scenes, daysSinceStart);
-  const current = await getMemberUnlockedIndex(db, memberId, series.id);
-  const next = Math.min(releasedCount, current + 1);
+  const releasedCount = scenes.length;
+  const childChoresToday = await countChildChoresToday(db, calendar);
+  const targetUnlockedIndex = Math.min(releasedCount, Math.max(1, 1 + Math.floor(childChoresToday / 3)));
+  const { results: childMembers } = await db
+    .prepare("SELECT id FROM family_members WHERE member_type = 'child' AND active = 1")
+    .all<{ id: number }>();
 
-  await db
-    .prepare(
-      `INSERT INTO story_progress (member_id, series_id, unlocked_index, last_unlocked_at)
-       VALUES (?, ?, ?, datetime('now'))
-       ON CONFLICT(member_id, series_id)
-       DO UPDATE SET unlocked_index = excluded.unlocked_index, last_unlocked_at = datetime('now')`,
-    )
-    .bind(memberId, series.id, next)
-    .run();
+  let newlyUnlocked = false;
+  let maxUnlockedIndex = 1;
+
+  for (const child of childMembers ?? []) {
+    const current = await getMemberUnlockedIndex(db, child.id, series.id);
+    const next = Math.max(current, targetUnlockedIndex);
+    maxUnlockedIndex = Math.max(maxUnlockedIndex, next);
+
+    if (next <= current) continue;
+    newlyUnlocked = true;
+
+    await db
+      .prepare(
+        `INSERT INTO story_progress (member_id, series_id, unlocked_index, last_unlocked_at)
+         VALUES (?, ?, ?, datetime('now'))
+         ON CONFLICT(member_id, series_id)
+         DO UPDATE SET unlocked_index = excluded.unlocked_index, last_unlocked_at = datetime('now')`,
+      )
+      .bind(child.id, series.id, next)
+      .run();
+  }
+
+  if (childMembers?.length === 0) return null;
 
   return {
     seriesSlug: series.slug,
-    unlockedIndex: next,
+    unlockedIndex: maxUnlockedIndex,
     releasedCount,
-    caughtUp: next >= releasedCount,
-    newlyUnlocked: next > current,
+    childChoresToday,
+    choresUntilNextUnlock: maxUnlockedIndex >= releasedCount ? 0 : (3 - (childChoresToday % 3)) % 3,
+    caughtUp: maxUnlockedIndex >= releasedCount,
+    newlyUnlocked,
   };
 }
 
 async function getAllStoryScenes(db: D1Database, slug: string | null) {
+  const seriesList = await getStorySeriesRows(db);
   const series = slug
-    ? await db
-        .prepare(
-          "SELECT id, slug, title, total_scenes, start_date, status FROM story_series WHERE slug = ? LIMIT 1",
-        )
-        .bind(slug)
-        .first<StorySeriesRow>()
-    : await getActiveStorySeries(db);
-  if (!series) return { ok: true, series: null, scenes: [] };
+    ? seriesList.find((storySeries) => storySeries.slug === slug) ?? null
+    : seriesList.find((storySeries) => storySeries.status === "active") ?? seriesList[0] ?? null;
+  if (!series) return { ok: true, series: null, seriesList: [], scenes: [] };
   const scenes = await getStorySceneRows(db, series.id);
   return {
     ok: true,
-    series: { slug: series.slug, title: series.title, total_scenes: series.total_scenes || scenes.length },
+    series: { slug: series.slug, title: series.title, total_scenes: series.total_scenes || scenes.length, status: series.status },
+    seriesList: seriesList.map((storySeries) => ({
+      slug: storySeries.slug,
+      title: storySeries.title,
+      total_scenes: storySeries.total_scenes,
+      status: storySeries.status,
+    })),
     scenes: scenes.map((scene) => ({
       scene_order: scene.scene_order,
       title: scene.title,

@@ -2,6 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { CreatureArt, type AquariumMood } from '../aquarium/AquariumView'
 
 const SPECIES = new Set(['clownfish', 'seahorse', 'angelfish', 'crab', 'pufferfish', 'starfish', 'clam'])
+const SPEAKER_SPECIES: Record<string, string> = {
+  stranger: 'pufferfish',
+  gang: 'pufferfish',
+}
 
 export type BeatPosition = 'left' | 'center' | 'right'
 
@@ -24,12 +28,19 @@ export type StoryScene = {
 
 export type StoryData = {
   ok: boolean
-  series: { slug: string; title: string; total_scenes: number } | null
+  series: { slug: string; title: string; total_scenes: number; status?: string } | null
   releasedCount: number
   accessibleCount: number
   totalScenes: number
   nextReleaseDate: string | null
   canUnlockMore: boolean
+  scenes: StoryScene[]
+}
+
+type PreviewStoryData = {
+  ok: boolean
+  series: { slug: string; title: string; total_scenes: number; status?: string } | null
+  seriesList: Array<{ slug: string; title: string; total_scenes: number; status: string }>
   scenes: StoryScene[]
 }
 
@@ -43,17 +54,19 @@ type ComicViewer = {
 type ComicViewProps = {
   apiBaseUrl: string
   members: ComicViewer[]
-  initialViewerId: number | null
+  previewMode?: boolean
 }
 
 const POSITIONS: BeatPosition[] = ['left', 'center', 'right']
 
 function CharacterPortrait({ beat }: { beat: StoryBeat }) {
+  const speciesId = SPECIES.has(beat.speaker) ? beat.speaker : SPEAKER_SPECIES[beat.speaker]
+
   return (
     <>
       <div className="comic-portrait">
-        {SPECIES.has(beat.speaker) ? (
-          <CreatureArt speciesId={beat.speaker} mood={beat.expression} />
+        {speciesId ? (
+          <CreatureArt speciesId={speciesId} mood={beat.expression} />
         ) : (
           <div className="comic-silhouette" aria-hidden="true">?</div>
         )}
@@ -106,44 +119,44 @@ export function ComicScene({ scene }: { scene: StoryScene }) {
   )
 }
 
-function viewerLabel(member: ComicViewer) {
-  return member.nickname?.trim() || member.display_name
-}
-
 function formatReleaseDate(value: string | null) {
   if (!value) return null
   const [y, m, d] = value.split('-').map(Number)
   return new Date(Date.UTC(y, (m || 1) - 1, d || 1)).toLocaleDateString(undefined, { month: 'long', day: 'numeric' })
 }
 
-export function ComicView({ apiBaseUrl, members, initialViewerId }: ComicViewProps) {
+export function ComicView({ apiBaseUrl, members, previewMode = false }: ComicViewProps) {
   const children = useMemo(() => members.filter((member) => member.member_type === 'child'), [members])
 
-  const [viewerId, setViewerId] = useState<number | null>(() => {
-    if (initialViewerId && children.some((child) => child.id === initialViewerId)) return initialViewerId
-    return children[0]?.id ?? null
-  })
-  const [data, setData] = useState<StoryData | null>(null)
+  const [data, setData] = useState<(StoryData & Partial<PreviewStoryData>) | null>(null)
+  const [selectedSlug, setSelectedSlug] = useState('')
   const [sceneIndex, setSceneIndex] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const communalViewerId = children[0]?.id ?? null
 
   const loadStory = useCallback(async () => {
     setLoading(true)
     setError('')
     try {
-      const query = viewerId ? `?memberId=${viewerId}` : ''
-      const response = await fetch(`${apiBaseUrl}/api/story${query}`)
-      const body = (await response.json()) as StoryData & { error?: string }
+      const query = previewMode
+        ? selectedSlug
+          ? `?slug=${encodeURIComponent(selectedSlug)}`
+          : ''
+        : communalViewerId
+          ? `?memberId=${communalViewerId}`
+          : ''
+      const response = await fetch(`${apiBaseUrl}${previewMode ? '/api/story/scenes' : '/api/story'}${query}`)
+      const body = (await response.json()) as (StoryData & Partial<PreviewStoryData>) & { error?: string }
       if (!response.ok) throw new Error(body.error ?? 'Could not load the story.')
       setData(body)
-      setSceneIndex(Math.max(0, body.scenes.length - 1))
+      setSceneIndex(previewMode ? 0 : Math.max(0, body.scenes.length - 1))
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Could not load the story.')
     } finally {
       setLoading(false)
     }
-  }, [apiBaseUrl, viewerId])
+  }, [apiBaseUrl, communalViewerId, previewMode, selectedSlug])
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -154,7 +167,7 @@ export function ComicView({ apiBaseUrl, members, initialViewerId }: ComicViewPro
 
   const scene = data?.scenes[sceneIndex]
 
-  if (children.length === 0) {
+  if (!previewMode && children.length === 0) {
     return (
       <section className="comic-view">
         <p className="comic-empty">Add a family member to start following the story.</p>
@@ -166,26 +179,31 @@ export function ComicView({ apiBaseUrl, members, initialViewerId }: ComicViewPro
     <section className="comic-view">
       <header className="comic-header">
         <div>
-          <p className="comic-eyebrow">Now showing</p>
+          <p className="comic-eyebrow">{previewMode ? 'Storyboard preview' : 'Now showing'}</p>
           <h1 className="comic-title">{data?.series?.title ?? 'Story'}</h1>
         </div>
-        <div className="comic-viewer-switch" role="group" aria-label="Whose story">
-          {children.map((child) => (
-            <button
-              key={child.id}
-              type="button"
-              className={`comic-viewer-chip${child.id === viewerId ? ' is-active' : ''}`}
-              onClick={() => setViewerId(child.id)}
-            >
-              {viewerLabel(child)}
-            </button>
-          ))}
-        </div>
+        {previewMode ? (
+          <select
+            className="comic-story-select"
+            value={data?.series?.slug ?? selectedSlug}
+            onChange={(event) => setSelectedSlug(event.target.value)}
+            aria-label="Preview story"
+            disabled={!data?.seriesList?.length}
+          >
+            {(data?.seriesList ?? []).map((series) => (
+              <option key={series.slug} value={series.slug}>
+                {series.title} ({series.status}, {series.total_scenes} scenes)
+              </option>
+            ))}
+          </select>
+        ) : null}
       </header>
 
       {data?.series && (
         <p className="comic-progress">
-          Scene {data.accessibleCount} of {data.totalScenes} &middot; {data.releasedCount} released so far
+          {previewMode
+            ? `Previewing all ${data.scenes.length} scenes`
+            : `Scene ${data.accessibleCount} of ${data.totalScenes} · ${data.releasedCount} released so far`}
         </p>
       )}
 
@@ -222,11 +240,11 @@ export function ComicView({ apiBaseUrl, members, initialViewerId }: ComicViewPro
             </button>
           </nav>
 
-          {sceneIndex >= data.scenes.length - 1 && (
+          {!previewMode && sceneIndex >= data.scenes.length - 1 && (
             <div className="comic-footer">
               {data.canUnlockMore ? (
                 <p className="comic-unlock-hint">
-                  Scene {data.accessibleCount + 1} is released. Do a chore to unlock it!
+                  The next panel is waiting for the aquarium to brighten.
                 </p>
               ) : data.accessibleCount >= data.totalScenes ? (
                 <p className="comic-unlock-hint comic-caught-up">You are all caught up. To be continued…</p>

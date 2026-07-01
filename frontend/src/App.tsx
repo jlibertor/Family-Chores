@@ -777,7 +777,12 @@ function App() {
     setSubmitting(true)
 
     try {
-      const data = await api<{ ok: boolean; earnedBug?: EarnedBug; aquariumEvent?: { fedMessage: string; state: AquariumData['state']; egg: unknown | null } }>('/api/completions', {
+      const data = await api<{
+        ok: boolean
+        earnedBug?: EarnedBug
+        aquariumEvent?: { fedMessage: string; state: AquariumData['state']; egg: unknown | null }
+        storyUnlock?: { newlyUnlocked: boolean; unlockedIndex: number } | null
+      }>('/api/completions', {
         method: 'POST',
         body: JSON.stringify({
           memberId,
@@ -795,7 +800,7 @@ function App() {
       const completionMessage = data.aquariumEvent
         ? `${memberName} fed the aquarium${bug ? ` and caught a ${bug.displayName}!` : '!'}`
         : `${memberName} completed ${chore.name}${bug ? ` and caught a ${bug.displayName}!` : '!'}`
-      setSuccessMessage(completionMessage)
+      setSuccessMessage(data.storyUnlock?.newlyUnlocked ? `${completionMessage} New story panel unlocked!` : completionMessage)
       setSuccessBugId(bug?.id ?? null)
       maybeShowCompletionNotification(memberName, chore.name)
       setPendingChore(null)
@@ -1284,7 +1289,7 @@ function App() {
       {route === '/history' && <HistoryView history={history} members={members} chores={chores} />}
 
       {route === '/story' && (
-        <ComicView apiBaseUrl={apiBaseUrl} members={members} initialViewerId={selectedMemberId} />
+        <ComicView apiBaseUrl={apiBaseUrl} members={members} />
       )}
 
       {route === '/scene-stepper' && canAccessSetup && (
@@ -1304,13 +1309,8 @@ function App() {
       )}
 
       {route === '/admin' && canAccessSetup && (
-        <div className="scene-stepper-entry">
-          <button type="button" onClick={() => navigate('/scene-stepper')}>🎬 Scene Stepper (test)</button>
-        </div>
-      )}
-
-      {route === '/admin' && canAccessSetup && (
         <AdminView
+          apiBaseUrl={apiBaseUrl}
           pin={adminPin}
           unlocked={adminUnlocked}
           members={adminMembers}
@@ -2097,6 +2097,7 @@ function HistoryItem({ completion }: { completion: Completion }) {
 }
 
 function AdminView({
+  apiBaseUrl,
   pin,
   unlocked,
   members,
@@ -2122,6 +2123,7 @@ function AdminView({
   onTestModeChange,
   onExport,
 }: {
+  apiBaseUrl: string
   pin: string
   unlocked: boolean
   members: Member[]
@@ -2147,7 +2149,7 @@ function AdminView({
   onTestModeChange: (enabled: boolean) => void
   onExport: () => void
 }) {
-  const [section, setSection] = useState<'menu' | 'members' | 'chores' | 'notes' | 'aquarium' | 'settings' | 'backup'>('menu')
+  const [section, setSection] = useState<'menu' | 'members' | 'chores' | 'notes' | 'aquarium' | 'settings' | 'backup' | 'stories'>('menu')
   const activeMembers = members.filter((member) => member.active === 1)
 
   function updateChoreAssignmentMode(assignment_mode: AssignmentMode) {
@@ -2216,6 +2218,10 @@ function AdminView({
           <button type="button" onClick={() => setSection('backup')}>
             <strong>Backup</strong>
             <span>Download a lightweight household export.</span>
+          </button>
+          <button type="button" onClick={() => setSection('stories')}>
+            <strong>Stories</strong>
+            <span>Preview every story panel without unlock limits.</span>
           </button>
           <button type="button" onClick={() => setSection('notes')}>
             <strong>Notes</strong>
@@ -2388,6 +2394,10 @@ function AdminView({
             </div>
           </section>
         </>
+      )}
+
+      {section === 'stories' && (
+        <ComicView apiBaseUrl={apiBaseUrl} members={members} previewMode />
       )}
 
       {section === 'settings' && (
@@ -2916,13 +2926,14 @@ function moodText(mood: AquariumData['state']['mood']) {
   return mood[0].toUpperCase() + mood.slice(1)
 }
 
-function setupSectionTitle(section: 'menu' | 'members' | 'chores' | 'notes' | 'aquarium' | 'settings' | 'backup') {
+function setupSectionTitle(section: 'menu' | 'members' | 'chores' | 'notes' | 'aquarium' | 'settings' | 'backup' | 'stories') {
   if (section === 'members') return 'Manage family members'
   if (section === 'chores') return 'Manage chores'
   if (section === 'notes') return 'Manage notes'
   if (section === 'aquarium') return 'Tune aquarium'
   if (section === 'settings') return 'Settings'
   if (section === 'backup') return 'Backup'
+  if (section === 'stories') return 'Preview stories'
   return 'What do you want to manage?'
 }
 
