@@ -1,0 +1,114 @@
+# Architecture
+
+Family Chores is a small single-household web app. The first beta should stay easy to understand, cheap to host, and simple to operate.
+
+## Target Components
+
+```text
+React + Vite SPA
+    |
+    | HTTPS API calls
+    v
+Cloudflare Worker
+    |
+    | D1 binding
+    v
+Cloudflare D1 database
+```
+
+## Frontend
+
+The frontend lives in `frontend/` and is a Vite React app. Phase 1 only provides a placeholder home page. Later phases will add member mode, kiosk mode, history, and parent setup views.
+
+The frontend should remain mobile-first because the main devices are phones and a shared kiosk or tablet.
+
+## API
+
+The API lives in `worker/` and is implemented as a Cloudflare Worker. It uses a D1 binding named `DB`.
+
+Current endpoints:
+
+- `GET /api/members`
+- `GET /api/members/:id/chores`
+- `GET /api/chores`
+- `GET /api/today`
+- `GET /api/status`
+- `GET /api/notes`
+- `POST /api/notes`
+- `POST /api/completions`
+- `GET /api/completions/recent`
+- `POST /api/session/select-member`
+- `POST /api/session/kiosk`
+- `GET /api/health`
+
+Parent setup endpoints require the `X-Parent-Pin` header:
+
+- `GET /api/admin/members`
+- `POST /api/admin/members`
+- `PUT /api/admin/members/:id`
+- `DELETE /api/admin/members/:id`
+- `GET /api/admin/chores`
+- `POST /api/admin/chores`
+- `PUT /api/admin/chores/:id`
+- `DELETE /api/admin/chores/:id`
+- `GET /api/admin/notes`
+- `POST /api/admin/notes`
+- `PUT /api/admin/notes/:id`
+- `GET /api/admin/export`
+
+Frontend routes include operational screens (`/today`, `/member`, `/kiosk`, `/history`, `/admin`) plus long-running household screens (`/display`, `/notes`). The `/today` route includes gentle rhythm indicators and quick actions that intentionally stay small.
+
+## Database
+
+Database migrations live in `database/migrations/`. The target database is Cloudflare D1, which uses SQLite-compatible SQL.
+
+The migrations create and seed:
+
+- `family_members`
+- `chores`
+- `chore_assignments`
+- `chore_completions`
+- `device_sessions`
+
+Chores use an assignment mode:
+
+- household chores any member can complete once per period
+- chores assigned to one person
+- per-person chores where each selected person has a separate obligation
+
+## Deployment Direction
+
+The intended deployment model is:
+
+- Cloudflare Pages for the static frontend
+- Cloudflare Worker for the API
+- Cloudflare D1 for persistence
+
+No secrets should be committed. Environment-specific values should be configured through Cloudflare or local `.dev.vars` files.
+
+## Documentation Structure
+
+Project documentation stays under `docs/` and should remain concise:
+
+- `architecture/ARCHITECTURE.md`: system shape and deployment direction
+- `architecture/DATA_MODEL.md`: database entities and relationships
+- `features/MVP_FEATURES.md`: phased feature scope
+- `features/STORY_ENGINE.md`: chore-gated comic story feature
+- `features/AQUARIUM_MOOD.md`: chore → fish mood math
+- `operations/SETUP.md`: local setup and development commands
+- `operations/TESTING.md`: lightweight validation checks
+- `operations/DEPLOYMENT.md`: Cloudflare deployment notes
+- `operations/CODEX_DEPLOYMENT_REFERENCE.md`: deployment quick reference for agents
+- `history/`: durable direction documents kept for the record
+- `handoff/open/`: active Codex implementation handoffs
+- `handoff/completed/`: accepted historical handoffs
+
+The handoff system intentionally has only two states: `open` and `completed`.
+
+## Explicit Non-Goals For Early Phases
+
+- SQL Server, IIS, Docker, or dedicated VMs
+- Enterprise authentication
+- Multi-tenant SaaS architecture
+- FactoryEdge or Factory AI dependencies
+- Allowance tracking or complex gamification

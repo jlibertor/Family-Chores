@@ -319,12 +319,20 @@ async function api<T>(path: string, options?: RequestInit, attempts = 2): Promis
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       const response = await fetch(`${apiBaseUrl}${path}`, {
+        ...options,
         headers: {
           'Content-Type': 'application/json',
           ...options?.headers,
         },
-        ...options,
       })
+
+      const contentType = response.headers.get('content-type') ?? ''
+      if (!contentType.includes('application/json')) {
+        // An HTML response means we hit the wrong origin (e.g. VITE_API_BASE_URL
+        // missing at build time serves the SPA's index.html). Surface a clear
+        // error instead of "Unexpected token '<' ... is not valid JSON".
+        throw new Error(`The chores server could not be reached (status ${response.status}).`)
+      }
 
       const body = (await response.json()) as T & { error?: string }
 
@@ -476,7 +484,19 @@ function App() {
     setCompletionNote('')
   }
 
+  // Refs mirror state so the 20s auto-refresh interval (created once on mount)
+  // never works from a stale closure, and so out-of-order responses can be
+  // dropped: a slow refresh started BEFORE a chore completion must not
+  // overwrite the fresher post-completion aquarium state (the fish would
+  // briefly "forget" the chore).
+  const refreshSeqRef = useRef(0)
+  const selectedMemberIdRef = useRef(selectedMemberId)
+  selectedMemberIdRef.current = selectedMemberId
+  const kioskMemberIdRef = useRef(kioskMemberId)
+  kioskMemberIdRef.current = kioskMemberId
+
   async function refreshHousehold(silent = false) {
+    const seq = ++refreshSeqRef.current
     if (!silent) {
       setLoadState('loading')
     }
@@ -493,6 +513,8 @@ function App() {
         api<{ ok: boolean; settings: AppSettings }>('/api/settings'),
       ])
 
+      if (seq !== refreshSeqRef.current) return
+
       setMembers(memberData.members)
       setChores(choreData.chores)
       setToday({
@@ -506,10 +528,12 @@ function App() {
       setAppSettings(settingsData.settings)
 
       const activeMemberIds = new Set(memberData.members.map((member) => member.id))
+      const currentSelectedMemberId = selectedMemberIdRef.current
+      const currentKioskMemberId = kioskMemberIdRef.current
 
-      if (selectedMemberId && activeMemberIds.has(selectedMemberId)) {
-        setMemberChores(await loadChoresForMember(selectedMemberId))
-      } else if (selectedMemberId) {
+      if (currentSelectedMemberId && activeMemberIds.has(currentSelectedMemberId)) {
+        setMemberChores(await loadChoresForMember(currentSelectedMemberId))
+      } else if (currentSelectedMemberId) {
         localStorage.removeItem(memberKey)
         setSelectedMemberId(null)
         setMemberChores([])
@@ -520,15 +544,16 @@ function App() {
         })
       }
 
-      if (kioskMemberId && activeMemberIds.has(kioskMemberId)) {
-        setKioskChores(await loadChoresForMember(kioskMemberId))
-      } else if (kioskMemberId) {
+      if (currentKioskMemberId && activeMemberIds.has(currentKioskMemberId)) {
+        setKioskChores(await loadChoresForMember(currentKioskMemberId))
+      } else if (currentKioskMemberId) {
         setKioskMemberId(null)
         setKioskChores([])
       }
 
       setLoadState('ready')
     } catch (currentError) {
+      if (seq !== refreshSeqRef.current) return
       setError(currentError instanceof Error ? currentError.message : 'Could not load app data.')
       setLoadState('error')
     }
@@ -801,6 +826,12 @@ function App() {
         ? `${memberName} fed the aquarium${bug ? ` and caught a ${bug.displayName}!` : '!'}`
         : `${memberName} completed ${chore.name}${bug ? ` and caught a ${bug.displayName}!` : '!'}`
       setSuccessMessage(data.storyUnlock?.newlyUnlocked ? `${completionMessage} New story panel unlocked!` : completionMessage)
+      // Apply the fresh post-completion aquarium state immediately so the fish
+      // visibly react to the chore before the full refresh lands.
+      if (data.aquariumEvent?.state) {
+        const eventState = data.aquariumEvent.state
+        setAquarium((current) => (current ? { ...current, state: { ...current.state, ...eventState } } : current))
+      }
       setSuccessBugId(bug?.id ?? null)
       maybeShowCompletionNotification(memberName, chore.name)
       setPendingChore(null)

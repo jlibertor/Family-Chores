@@ -86,8 +86,17 @@ const isAssignmentMode = (value: unknown): value is AssignmentMode =>
   value === "household_anyone" || value === "assigned_individual" || value === "per_person";
 
 const requireParentPin = (request: Request, env: Env) => {
-  const expectedPin = env.PARENT_PIN ?? "1234";
-  return request.headers.get("X-Parent-Pin") === expectedPin;
+  // Fail closed: if no PARENT_PIN is configured, admin endpoints are locked.
+  // (Local dev: set PARENT_PIN in worker/.dev.vars — see docs/SETUP.md.)
+  const expectedPin = env.PARENT_PIN;
+  if (!expectedPin) return false;
+  const providedPin = request.headers.get("X-Parent-Pin") ?? "";
+  if (providedPin.length !== expectedPin.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < expectedPin.length; i += 1) {
+    mismatch |= providedPin.charCodeAt(i) ^ expectedPin.charCodeAt(i);
+  }
+  return mismatch === 0;
 };
 
 type AppSettings = {
@@ -443,7 +452,9 @@ function getParticipationCeilingMood(distinctChildCount: number, activeChildCoun
   if (distinctChildCount >= activeChildCount) return "happy";
   if (distinctChildCount >= activeChildCount - 1) return "content";
   if (distinctChildCount >= Math.ceil(activeChildCount / 2)) return "peckish";
-  return "hungry";
+  // Any participation at all still earns acknowledgment: never cap below "peckish".
+  // (One child cannot carry the tank to "happy", but their effort must be visible.)
+  return "peckish";
 }
 
 function getBaseAquariumMood(state: AquariumStateRow, todayChildCount: number): AquariumMood {
@@ -476,8 +487,22 @@ function getAquariumMood(state: AquariumStateRow, participation: AquariumPartici
     participation.todayDistinctChildCount,
     participation.activeChildCount,
   );
+  const cappedMood = participationCeilingMood
+    ? worseAquariumMood(baseMood, participationCeilingMood)
+    : baseMood;
 
-  return participationCeilingMood ? worseAquariumMood(baseMood, participationCeilingMood) : baseMood;
+  // Invariant: a completed chore must NEVER leave the tank worse than doing nothing
+  // would. Without this floor, the first chore of the day could drop the mood from
+  // time-decay "peckish" (0 chores, recently fed) to count-based "hungry" (1 chore),
+  // which reads to a kid as punishment for helping.
+  if (participation.todayChildCount > 0) {
+    const zeroChoreMood = getBaseAquariumMood(state, 0);
+    if (aquariumMoodRank[cappedMood] < aquariumMoodRank[zeroChoreMood]) {
+      return zeroChoreMood;
+    }
+  }
+
+  return cappedMood;
 }
 
 function getAquariumMoodDebug(
@@ -545,14 +570,26 @@ function getAquariumMoodDebug(
   };
 }
 
-function getAquariumMoodMessage(mood: AquariumMood, todayChildCount: number) {
+function getAquariumMoodMessage(
+  mood: AquariumMood,
+  todayChildCount: number,
+  panic?: { active: boolean; choresNeeded: number },
+) {
+  // During panic, show progress toward rescue so every chore visibly counts.
+  if (panic?.active) {
+    const needed = Math.max(1, panic.choresNeeded);
+    return `The fish are scared! ${needed} more ${needed === 1 ? "chore" : "chores"} to save them.`;
+  }
   if (mood === "happy") return "The fish are well fed today.";
   if (mood === "content") return "The fish are doing okay today.";
   if (mood === "peckish") return "The fish could use a little more help today.";
+  // From here down the tank is hungry/very_hungry/sad. Never claim "no chores"
+  // when chores actually happened — always acknowledge the completed count.
   if (todayChildCount === 1) return "Only 1 chore completed today.";
-  if (mood === "very_hungry") return "No chores completed today!";
-  if (mood === "sad") return "No chores completed today!";
-  return "No chores completed today.";
+  if (todayChildCount > 1) {
+    return `${todayChildCount} chores done — the fish need more of the family to pitch in.`;
+  }
+  return "No chores completed today!";
 }
 
 type FishNotificationHistoryRow = {
@@ -1319,6 +1356,7 @@ async function sendTwilioSms(env: Env, message: string, recipientOptions: SmsRec
 
   const authHeader = btoa(`${authUsername}:${authPassword}`);
   const results: SmsProviderResult[] = [];
+  let firstSendError: TwilioSmsError | null = null;
 
   for (const recipient of recipients) {
     const form = new URLSearchParams();
@@ -1342,7 +1380,11 @@ async function sendTwilioSms(env: Env, message: string, recipientOptions: SmsRec
     const twilioMoreInfo = stringValue(responseBody?.more_info);
 
     if (!response.ok) {
-      throw new TwilioSmsError(twilioMessage ?? `Twilio SMS failed with status ${response.status}.`, {
+      // Do not abort the whole batch on one failed recipient: recipients that
+      // were already texted would be re-texted on the next cron run because
+      // the run would be recorded as "failed". Remember the error, keep going,
+      // and only fail the run if nobody received the message.
+      firstSendError ??= new TwilioSmsError(twilioMessage ?? `Twilio SMS failed with status ${response.status}.`, {
         diagnostics: {
           ...baseDiagnostics,
           provider: {
@@ -1358,6 +1400,7 @@ async function sendTwilioSms(env: Env, message: string, recipientOptions: SmsRec
         twilioCode,
         twilioMessage,
       });
+      continue;
     }
 
     results.push({
@@ -1365,6 +1408,13 @@ async function sendTwilioSms(env: Env, message: string, recipientOptions: SmsRec
       providerMessageId: stringValue(responseBody?.sid),
       providerStatus,
     });
+  }
+
+  if (results.length === 0 && firstSendError) {
+    throw firstSendError;
+  }
+  if (firstSendError) {
+    console.error("Twilio SMS partial failure (some recipients skipped):", firstSendError.message);
   }
 
   return results;
@@ -2300,6 +2350,7 @@ async function applyAquariumMaintenance(db: D1Database, env?: Env) {
     .prepare(
       `UPDATE aquarium_state
        SET everything_good_until = NULL,
+           last_fed_at = datetime('now'),
            updated_at = datetime('now')
        WHERE id = 1
         AND everything_good_until IS NOT NULL
@@ -2527,7 +2578,10 @@ async function listAquarium(db: D1Database, env?: Env) {
       state: {
         ...state,
         mood,
-        mood_message: getAquariumMoodMessage(mood, participation.todayChildCount),
+        mood_message: getAquariumMoodMessage(mood, participation.todayChildCount, {
+          active: state.panic_mode === 1,
+          choresNeeded: state.panic_chores_needed,
+        }),
         panic_mode: state.panic_mode,
         panic_chores_needed: state.panic_chores_needed,
         everything_good_until: state.everything_good_until,
@@ -2611,7 +2665,10 @@ async function addAquariumFoodForCompletion(
     state: {
       ...state,
       mood: mood2,
-      mood_message: getAquariumMoodMessage(mood2, participation.todayChildCount),
+      mood_message: getAquariumMoodMessage(mood2, participation.todayChildCount, {
+        active: state.panic_mode === 1,
+        choresNeeded: state.panic_chores_needed,
+      }),
       panic_mode: state.panic_mode,
       panic_chores_needed: state.panic_chores_needed,
       everything_good_until: state.everything_good_until,
@@ -2630,7 +2687,6 @@ async function triggerAquariumPanic(db: D1Database) {
            panic_chores_needed = 3,
            panic_expires_at = datetime('now', '+4 hours'),
            everything_good_until = NULL,
-           last_fed_at = datetime('now', '-48 hours'),
            updated_at = datetime('now')
        WHERE id = 1`,
     )
@@ -3112,10 +3168,13 @@ async function recordCompletion(request: Request, env: Env, ctx: ExecutionContex
     );
   }
 
-  const storyUnlock = await unlockStoryScenesForDailyChildChores(db).catch((error) => {
-    console.error("Story unlock failed", error);
-    return null;
-  });
+  const storyUnlock =
+    member.member_type === "child"
+      ? await advanceStoryProgressForCompletion(db, memberId).catch((error) => {
+          console.error("Story unlock failed", error);
+          return null;
+        })
+      : null;
 
   return json({
     ok: true,
@@ -3716,12 +3775,21 @@ async function getStorySeriesRows(db: D1Database): Promise<StorySeriesRow[]> {
   return results ?? [];
 }
 
-async function getMemberUnlockedIndex(db: D1Database, memberId: number, seriesId: number): Promise<number> {
+// Story progress is shared by the whole household: the pointer is the MAX
+// unlocked_index across all active children.
+async function getHouseholdUnlockedIndex(db: D1Database, seriesId: number): Promise<number> {
   const row = await db
-    .prepare("SELECT unlocked_index FROM story_progress WHERE member_id = ? AND series_id = ?")
-    .bind(memberId, seriesId)
+    .prepare(
+      `SELECT COALESCE(MAX(sp.unlocked_index), 1) AS unlocked_index
+       FROM story_progress sp
+       JOIN family_members fm ON fm.id = sp.member_id
+       WHERE sp.series_id = ?
+        AND fm.member_type = 'child'
+        AND fm.active = 1`,
+    )
+    .bind(seriesId)
     .first<{ unlocked_index: number }>();
-  return row ? Math.max(1, row.unlocked_index) : 1;
+  return Math.max(1, Number(row?.unlocked_index ?? 1));
 }
 
 function parseSceneScript(raw: string) {
@@ -3736,22 +3804,8 @@ function countReleasedScenes(scenes: StorySceneRow[], daysSinceStart: number): n
   return scenes.filter((scene) => scene.release_offset_days <= daysSinceStart).length;
 }
 
-async function countChildChoresToday(db: D1Database, calendar: HouseholdCalendar): Promise<number> {
-  const row = await db
-    .prepare(
-      `SELECT COUNT(*) AS completed_count
-       FROM chore_completions cc
-       JOIN family_members fm ON fm.id = cc.completed_by_member_id
-       WHERE fm.member_type = 'child'
-        AND cc.completed_at >= ?
-        AND cc.completed_at < ?`,
-    )
-    .bind(calendar.todayStart, calendar.todayEnd)
-    .first<{ completed_count: number }>();
-  return Number(row?.completed_count ?? 0);
-}
-
-async function getStoryForMember(db: D1Database, memberId: number | null) {
+// memberId is accepted for API compatibility; progress is household-shared.
+async function getStoryForMember(db: D1Database, _memberId: number | null) {
   const series = await getActiveStorySeries(db);
   if (!series) {
     return {
@@ -3768,9 +3822,16 @@ async function getStoryForMember(db: D1Database, memberId: number | null) {
 
   const calendar = getHouseholdCalendar();
   const scenes = await getStorySceneRows(db, series.id);
-  const releasedCount = scenes.length;
-  const unlocked = memberId ? await getMemberUnlockedIndex(db, memberId, series.id) : 1;
+  // Two clocks: the release calendar gates the frontier (nobody can binge past it),
+  // and the per-member chore clock gates how far each member has caught up to it.
+  const daysSinceStart = daysBetween(series.start_date, calendar.todayDate);
+  const releasedCount = Math.max(1, Math.min(scenes.length, countReleasedScenes(scenes, daysSinceStart)));
+  // Progress is household-shared, so every member (and the communal aquarium
+  // page) sees the same story position regardless of memberId.
+  const unlocked = await getHouseholdUnlockedIndex(db, series.id);
   const accessibleCount = Math.min(releasedCount, Math.max(unlocked, 1));
+  const nextScene = scenes.find((scene) => scene.release_offset_days > daysSinceStart);
+  const nextReleaseDate = nextScene ? addDaysToDate(series.start_date, nextScene.release_offset_days) : null;
 
   const accessibleScenes = scenes.slice(0, accessibleCount).map((scene) => ({
     scene_order: scene.scene_order,
@@ -3785,57 +3846,89 @@ async function getStoryForMember(db: D1Database, memberId: number | null) {
     releasedCount,
     accessibleCount,
     totalScenes: scenes.length,
-    nextReleaseDate: null,
+    nextReleaseDate,
     canUnlockMore: accessibleCount < releasedCount,
     scenes: accessibleScenes,
   };
 }
 
-async function unlockStoryScenesForDailyChildChores(db: D1Database) {
+// Story unlock rule: each UNIQUE child who completes at least one chore today
+// unlocks one scene for the household. The trigger is the child's FIRST chore
+// of the day — extra chores by the same child do not unlock more scenes. With
+// N active children, at most N scenes can unlock per day, and the release
+// calendar (frontier) still caps everything, so nobody can binge ahead.
+// Progress is household-shared. (docs/features/STORY_ENGINE.md §mechanic)
+async function advanceStoryProgressForCompletion(db: D1Database, memberId: number) {
   const series = await getActiveStorySeries(db);
   if (!series) return null;
 
   const calendar = getHouseholdCalendar();
   const scenes = await getStorySceneRows(db, series.id);
-  const releasedCount = scenes.length;
-  const childChoresToday = await countChildChoresToday(db, calendar);
-  const targetUnlockedIndex = Math.min(releasedCount, Math.max(1, 1 + Math.floor(childChoresToday / 3)));
-  const { results: childMembers } = await db
-    .prepare("SELECT id FROM family_members WHERE member_type = 'child' AND active = 1")
-    .all<{ id: number }>();
+  if (scenes.length === 0) return null;
 
-  let newlyUnlocked = false;
-  let maxUnlockedIndex = 1;
+  const daysSinceStart = daysBetween(series.start_date, calendar.todayDate);
+  const releasedCount = Math.max(1, Math.min(scenes.length, countReleasedScenes(scenes, daysSinceStart)));
 
-  for (const child of childMembers ?? []) {
-    const current = await getMemberUnlockedIndex(db, child.id, series.id);
-    const next = Math.max(current, targetUnlockedIndex);
-    maxUnlockedIndex = Math.max(maxUnlockedIndex, next);
+  // This runs AFTER the completion insert, so a count of exactly 1 means this
+  // was the member's first completed chore of the day.
+  const todayCountRow = await db
+    .prepare(
+      `SELECT COUNT(*) AS completed_count
+       FROM chore_completions
+       WHERE completed_by_member_id = ?
+        AND completed_at >= ?
+        AND completed_at < ?`,
+    )
+    .bind(memberId, calendar.todayStart, calendar.todayEnd)
+    .first<{ completed_count: number }>();
+  const isFirstChoreToday = Number(todayCountRow?.completed_count ?? 0) === 1;
 
-    if (next <= current) continue;
-    newlyUnlocked = true;
+  const previousIndex = await getHouseholdUnlockedIndex(db, series.id);
 
-    await db
-      .prepare(
-        `INSERT INTO story_progress (member_id, series_id, unlocked_index, last_unlocked_at)
-         VALUES (?, ?, ?, datetime('now'))
-         ON CONFLICT(member_id, series_id)
-         DO UPDATE SET unlocked_index = excluded.unlocked_index, last_unlocked_at = datetime('now')`,
-      )
-      .bind(child.id, series.id, next)
-      .run();
+  if (!isFirstChoreToday || previousIndex >= releasedCount) {
+    return {
+      seriesSlug: series.slug,
+      unlockedIndex: Math.min(previousIndex, releasedCount),
+      releasedCount,
+      caughtUp: previousIndex >= releasedCount,
+      newlyUnlocked: false,
+    };
   }
 
-  if (childMembers?.length === 0) return null;
+  // Advance the household pointer by one scene. The new index is computed
+  // inside the statement so two children unlocking near-simultaneously are
+  // each counted (D1 serializes statements).
+  await db
+    .prepare(
+      `INSERT INTO story_progress (member_id, series_id, unlocked_index, last_unlocked_at)
+       VALUES (
+         ?, ?,
+         MIN(
+           ?,
+           1 + (SELECT COALESCE(MAX(sp.unlocked_index), 1)
+                FROM story_progress sp
+                JOIN family_members fm ON fm.id = sp.member_id
+                WHERE sp.series_id = ?
+                 AND fm.member_type = 'child'
+                 AND fm.active = 1)
+         ),
+         datetime('now')
+       )
+       ON CONFLICT(member_id, series_id)
+       DO UPDATE SET unlocked_index = MAX(story_progress.unlocked_index, excluded.unlocked_index),
+                     last_unlocked_at = datetime('now')`,
+    )
+    .bind(memberId, series.id, releasedCount, series.id)
+    .run();
+
+  const unlockedIndex = await getHouseholdUnlockedIndex(db, series.id);
 
   return {
     seriesSlug: series.slug,
-    unlockedIndex: maxUnlockedIndex,
+    unlockedIndex,
     releasedCount,
-    childChoresToday,
-    choresUntilNextUnlock: maxUnlockedIndex >= releasedCount ? 0 : (3 - (childChoresToday % 3)) % 3,
-    caughtUp: maxUnlockedIndex >= releasedCount,
-    newlyUnlocked,
+    caughtUp: unlockedIndex >= releasedCount,
+    newlyUnlocked: unlockedIndex > previousIndex,
   };
 }
 
@@ -3864,8 +3957,7 @@ async function getAllStoryScenes(db: D1Database, slug: string | null) {
   };
 }
 
-export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+async function handleApiRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: corsHeaders });
     }
@@ -3933,7 +4025,9 @@ export default {
     }
 
     if (request.method === "POST" && url.pathname === "/api/fish-notifications/current-mode") {
-      if (!(await isTestModeEnabled(env)) && !requireParentPin(request, env)) {
+      // Always require the parent PIN — test mode must not open an
+      // unauthenticated SMS-sending endpoint to the internet.
+      if (!requireParentPin(request, env)) {
         return unauthorized();
       }
 
@@ -4077,7 +4171,20 @@ export default {
     }
 
     return json({ ok: false, error: "Not found" }, { status: 404 });
+}
+
+export default {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    // Catch-all so unhandled errors return JSON with CORS headers instead of
+    // an opaque 500 the browser reports as a network failure.
+    try {
+      return await handleApiRequest(request, env, ctx);
+    } catch (error) {
+      console.error("Unhandled API error:", error);
+      return json({ ok: false, error: "Internal server error." }, { status: 500 });
+    }
   },
+  // Hourly cron: fish hunger + reward thank-you notifications.
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(
       (async () => {

@@ -17,10 +17,10 @@ The project is currently in **Phase 1: Project Foundation**. This phase creates 
 ```text
 Family-Chores/
 ├── docs/
-│   ├── ARCHITECTURE.md
-│   ├── DATA_MODEL.md
-│   ├── MVP_FEATURES.md
-│   ├── SETUP.md
+│   ├── architecture/
+│   ├── features/
+│   ├── operations/
+│   ├── history/
 │   └── handoff/
 │       ├── open/
 │       └── completed/
@@ -68,31 +68,18 @@ Run lint checks:
 npm run lint
 ```
 
-See [docs/SETUP.md](docs/SETUP.md) for workspace-specific setup notes.
+See [docs/operations/SETUP.md](docs/operations/SETUP.md) for workspace-specific setup notes.
 
 ## Documentation
 
-Project documentation lives in `docs/`. Implementation handoffs live under `docs/handoff/` with only two states:
+Project documentation lives in `docs/`, organized by topic:
 
-- `open/` for active or pending Codex work
-- `completed/` for accepted historical handoffs
-
-Move handoff files from `open` to `completed` after the work is reviewed and accepted. Do not duplicate handoff files between states.
-
-## Phase 1 Scope
-
-Included:
-
-- Documentation for architecture, data model, and MVP phases
-- Vite React frontend placeholder
-- Cloudflare Worker health endpoint
-- Initial D1 migration draft
-
-Not included yet:
-
-- Authentication or PIN setup
-- Full chore completion workflow
-- Admin screens
-- SMS, email, or push alerts
-- Allowance tracking or gamification
-- Production deployment
+- **Architecture**
+  - [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) — system shape and deployment direction
+  - [docs/architecture/DATA_MODEL.md](docs/architecture/DATA_MODEL.md) — database entities and relationships
+- **Features**
+  - [docs/features/MVP_FEATURES.md](docs/features/MVP_FEATURES.md) — phased feature scope
+  - [docs/features/STORY_ENGINE.md](docs/features/STORY_ENGINE.md) — the chore-gated comic story engine
+  - [docs/features/AQUARIUM_MOOD.md](docs/features/AQUARIUM_MOOD.md) — the chore → fish mood math
+- **Operations**
+  - [docs/operations/SETUP.md](docs/operations/SETUP.md) — local setup and deve

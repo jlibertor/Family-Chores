@@ -1,6 +1,6 @@
 # Handoff — Story Engine: apply migrations & next build
 
-> **Design/architecture reference:** [`docs/STORY_ENGINE.md`](../../STORY_ENGINE.md)
+> **Design/architecture reference:** [`docs/features/STORY_ENGINE.md`](../../features/STORY_ENGINE.md)
 > (story bible, two-clock mechanic, data model, full Taken/Reef detail). This file is
 > only the **actionable** work. Move it to `completed/` once the migrations below are
 > applied and verified.
@@ -39,10 +39,10 @@ Then reload — no dev-server restart needed (same DB). Verify: the `/story` pag
 ## 2. Next build work
 
 - **Write "Reef of Thrones" in full** — needs the two open design decisions from the
-  user first (see `docs/STORY_ENGINE.md` §4): death intensity, and ending vs.
+  user first (see `docs/features/STORY_ENGINE.md` §4): death intensity, and ending vs.
   evergreen. Then author it as one migration (content-pack model).
 - Optional: inline-SVG props; more seasons; deeper chore tie-ins; holiday easter eggs
-  (backlog in `docs/STORY_ENGINE.md` §7).
+  (backlog in `docs/features/STORY_ENGINE.md` §7).
 
 ## 3. Cautions for whoever edits next
 
@@ -57,4 +57,4 @@ Then reload — no dev-server restart needed (same DB). Verify: the `/story` pag
   Recommend restoring `AquariumView.tsx` from VS Code **Timeline / Local History**, then
   re-applying the one-line `export function CreatureArt`.
 - **Verify:** `cd worker && npx tsc --noEmit`; `cd frontend && npx tsc --noEmit -p
-  tsconfig.app.json`; dry-run every `database/migrations/*.sql` into a throwaway SQLite.
+  tsconfig.app.json`; dry-run every `database/migrati
