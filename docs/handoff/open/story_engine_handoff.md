@@ -57,4 +57,4 @@ Then reload — no dev-server restart needed (same DB). Verify: the `/story` pag
   Recommend restoring `AquariumView.tsx` from VS Code **Timeline / Local History**, then
   re-applying the one-line `export function CreatureArt`.
 - **Verify:** `cd worker && npx tsc --noEmit`; `cd frontend && npx tsc --noEmit -p
-  tsconfig.app.json`; dry-run every `database/migrati
+  tsconfig.app.json`; dry-run every `database/migrations/*.sql` into a throwaway SQLite.

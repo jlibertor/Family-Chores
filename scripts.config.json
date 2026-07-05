@@ -1,0 +1,82 @@
+{
+  "project": "Family-Chores",
+  "root": "C:\\Applications\\Personal\\GitHub\\Family-Chores",
+  "scripts": [
+    {
+      "id": "deploy-prod",
+      "name": "Deploy to Production",
+      "type": "deploy",
+      "command": "npm run deploy:prod",
+      "cwd": "C:\\Applications\\Personal\\GitHub\\Family-Chores",
+      "scriptPath": "C:\\Applications\\Personal\\GitHub\\Family-Chores\\scripts\\deploy-prod.mjs",
+      "description": "Full production deploy. Verifies required Worker secrets (PARENT_PIN) via Wrangler, then deploys worker and frontend. This is the primary deploy command."
+    },
+    {
+      "id": "deploy-worker",
+      "name": "Deploy Worker (API)",
+      "type": "deploy",
+      "command": "npm run deploy:worker",
+      "cwd": "C:\\Applications\\Personal\\GitHub\\Family-Chores",
+      "scriptPath": null,
+      "description": "Deploys only the Cloudflare Worker/API via 'wrangler deploy'."
+    },
+    {
+      "id": "deploy-frontend",
+      "name": "Deploy Frontend (Pages)",
+      "type": "deploy",
+      "command": "npm run deploy:frontend",
+      "cwd": "C:\\Applications\\Personal\\GitHub\\Family-Chores",
+      "scriptPath": null,
+      "description": "Deploys only the frontend to Cloudflare Pages ('wrangler pages deploy dist --project-name family-chores')."
+    },
+    {
+      "id": "smoke",
+      "name": "Smoke Test",
+      "type": "test",
+      "command": "npm run smoke",
+      "cwd": "C:\\Applications\\Personal\\GitHub\\Family-Chores",
+      "scriptPath": "C:\\Applications\\Personal\\GitHub\\Family-Chores\\scripts\\smoke-test.mjs",
+      "description": "Hits API endpoints (/api/health, /api/members, /api/chores, /api/today, /api/status) and asserts expected data. Targets http://127.0.0.1:8787 by default.",
+      "env": {
+        "API_BASE_URL": "https://family-chores-api.jlibertor.workers.dev",
+        "PARENT_PIN": "1234"
+      }
+    },
+    {
+      "id": "build",
+      "name": "Build All",
+      "type": "build",
+      "command": "npm run build",
+      "cwd": "C:\\Applications\\Personal\\GitHub\\Family-Chores",
+      "scriptPath": null,
+      "description": "Builds both the frontend and worker workspaces."
+    },
+    {
+      "id": "lint",
+      "name": "Lint All",
+      "type": "lint",
+      "command": "npm run lint",
+      "cwd": "C:\\Applications\\Personal\\GitHub\\Family-Chores",
+      "scriptPath": null,
+      "description": "Lints both the frontend and worker workspaces."
+    },
+    {
+      "id": "dev-frontend",
+      "name": "Dev: Frontend",
+      "type": "dev",
+      "command": "npm run dev:frontend",
+      "cwd": "C:\\Applications\\Personal\\GitHub\\Family-Chores",
+      "scriptPath": null,
+      "description": "Starts the Vite frontend dev server."
+    },
+    {
+      "id": "dev-worker",
+      "name": "Dev: Worker",
+      "type": "dev",
+      "command": "npm run dev:worker",
+      "cwd": "C:\\Applications\\Personal\\GitHub\\Family-Chores",
+      "scriptPath": null,
+      "description": "Starts the Cloudflare Worker locally via Wrangler on port 8787."
+    }
+  ]
+}

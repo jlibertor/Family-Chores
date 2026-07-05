@@ -82,4 +82,34 @@ Project documentation lives in `docs/`, organized by topic:
   - [docs/features/STORY_ENGINE.md](docs/features/STORY_ENGINE.md) — the chore-gated comic story engine
   - [docs/features/AQUARIUM_MOOD.md](docs/features/AQUARIUM_MOOD.md) — the chore → fish mood math
 - **Operations**
-  - [docs/operations/SETUP.md](docs/operations/SETUP.md) — local setup and deve
+  - [docs/operations/SETUP.md](docs/operations/SETUP.md) — local setup and development commands
+  - [docs/operations/TESTING.md](docs/operations/TESTING.md) — lightweight validation checks
+  - [docs/operations/DEPLOYMENT.md](docs/operations/DEPLOYMENT.md) — Cloudflare deployment notes
+  - [docs/operations/CODEX_DEPLOYMENT_REFERENCE.md](docs/operations/CODEX_DEPLOYMENT_REFERENCE.md) — deployment quick reference for agents
+- **History**
+  - [docs/history/family_chores_codex_guardrails_and_direction.md](docs/history/family_chores_codex_guardrails_and_direction.md) — project philosophy and guardrails
+
+Implementation handoffs live under `docs/handoff/` with only two states:
+
+- `open/` for active or pending Codex work
+- `completed/` for accepted historical handoffs
+
+Move handoff files from `open` to `completed` after the work is reviewed and accepted. Do not duplicate handoff files between states.
+
+## Phase 1 Scope
+
+Included:
+
+- Documentation for architecture, data model, and MVP phases
+- Vite React frontend placeholder
+- Cloudflare Worker health endpoint
+- Initial D1 migration draft
+
+Not included yet:
+
+- Authentication or PIN setup
+- Full chore completion workflow
+- Admin screens
+- SMS, email, or push alerts
+- Allowance tracking or gamification
+- Production deployment
