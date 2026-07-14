@@ -38,9 +38,10 @@ npm run deploy:prod
 
 That command:
 
-1. Deploys the Cloudflare Worker.
-2. Builds the Vite frontend with the production Worker URL.
-3. Deploys `frontend/dist` to Cloudflare Pages as the production branch.
+1. Applies pending remote D1 migrations and captures Wrangler's migration backup.
+2. Deploys the Cloudflare Worker.
+3. Builds the Vite frontend with the production Worker URL.
+4. Deploys `frontend/dist` to Cloudflare Pages as the production branch.
 
 ## Verify Production
 

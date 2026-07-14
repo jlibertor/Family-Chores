@@ -13,7 +13,9 @@ interface Env {
   FISH_MESSAGE_MODE?: string;
 }
 
-type SessionMode = "member" | "kiosk" | "admin";
+// D1 keeps the historical `kiosk` value for completion audit rows. It now
+// means the app's single shared-device workflow, not a selectable UI mode.
+type SessionMode = "kiosk";
 type MemberType = "adult" | "child";
 type FrequencyType = "daily" | "weekdays" | "weekends" | "weekly" | "monthly" | "as_needed";
 type AssignmentMode = "household_anyone" | "assigned_individual" | "per_person";
@@ -69,8 +71,11 @@ const asPositiveIntegerList = (value: unknown) =>
     ? [...new Set(value.map((item) => asPositiveInteger(item)).filter((item): item is number => item !== null))]
     : [];
 
-const isSessionMode = (value: unknown): value is SessionMode =>
-  value === "member" || value === "kiosk" || value === "admin";
+const asAquariumHookCycleKey = (value: unknown) => {
+  if (typeof value !== "string") return null;
+  const cycleKey = value.trim();
+  return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(cycleKey) ? cycleKey : null;
+};
 
 const isMemberType = (value: unknown): value is MemberType => value === "adult" || value === "child";
 
@@ -198,7 +203,17 @@ const bugIds = [
   "tiny-horn-bug",
 ];
 
-const aquariumSpeciesIds = ["clownfish", "seahorse", "angelfish", "crab", "pufferfish", "starfish", "clam"];
+const aquariumSpeciesIds = [
+  "clownfish",
+  "seahorse",
+  "angelfish",
+  "crab",
+  "pufferfish",
+  "benny-fish",
+  "happy-jellyfish",
+  "starfish",
+  "clam",
+];
 
 const publicMemberNameSql = (alias: string) => `COALESCE(NULLIF(TRIM(${alias}.nickname), ''), ${alias}.display_name)`;
 
@@ -372,6 +387,26 @@ type AquariumStateRow = {
   panic_chores_needed: number;
   panic_expires_at: string | null;
   everything_good_until: string | null;
+};
+
+type AquariumCreatureRow = {
+  id: number;
+  species_id: string;
+  growth_stage: "baby" | "adult";
+  created_at: string;
+  updated_at: string;
+};
+
+type AquariumHookCaptureRow = {
+  id: number;
+  cycle_key: string;
+  mood: AquariumMood;
+  result: "reserved" | "taken" | "skipped";
+  reason: string;
+  creature_id: number | null;
+  message: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 const fishEmojiPools = {
@@ -2330,6 +2365,7 @@ async function applyAquariumMaintenance(db: D1Database, env?: Env) {
       `SELECT id
        FROM aquarium_creatures
        WHERE growth_stage = 'baby'
+        AND taken_at IS NULL
         AND julianday('now') - julianday(created_at) >= (SELECT growth_days FROM aquarium_state WHERE id = 1)
         AND (SELECT food_reserve * 1.0 / max_food_reserve FROM aquarium_state WHERE id = 1) >= 0.4`,
     )
@@ -2341,6 +2377,7 @@ async function applyAquariumMaintenance(db: D1Database, env?: Env) {
        SET growth_stage = 'adult',
            updated_at = datetime('now')
        WHERE growth_stage = 'baby'
+        AND taken_at IS NULL
         AND julianday('now') - julianday(created_at) >= (SELECT growth_days FROM aquarium_state WHERE id = 1)
         AND (SELECT food_reserve * 1.0 / max_food_reserve FROM aquarium_state WHERE id = 1) >= 0.4`,
     )
@@ -2457,9 +2494,10 @@ async function listAquarium(db: D1Database, env?: Env) {
       .prepare(
         `SELECT id, species_id, growth_stage, created_at, updated_at
          FROM aquarium_creatures
+         WHERE taken_at IS NULL
          ORDER BY created_at, id`,
       )
-      .all(),
+      .all<AquariumCreatureRow>(),
     db
       .prepare(
         `SELECT id, species_id, laid_at, hatch_after, hatched_at, creature_id, completion_id, created_at, updated_at
@@ -2743,14 +2781,44 @@ async function nextAquariumSpeciesId(db: D1Database) {
   const { results } = await db
     .prepare(
       `SELECT species_id FROM aquarium_creatures
+       WHERE taken_at IS NULL
        UNION
        SELECT species_id FROM aquarium_eggs
        WHERE hatched_at IS NULL`,
     )
     .all<{ species_id: string }>();
   const discoveredOrPending = new Set(results.map((row) => row.species_id));
+  const undiscoveredSpecies = aquariumSpeciesIds.find((speciesId) => !discoveredOrPending.has(speciesId));
+  if (undiscoveredSpecies) return undiscoveredSpecies;
 
-  return aquariumSpeciesIds.find((speciesId) => !discoveredOrPending.has(speciesId)) ?? "seahorse";
+  // Once the collection is complete, keep both of the playful duplicate fish
+  // populations available for hook stories. Count active creatures and pending
+  // eggs so rapid milestones alternate instead of stacking one species.
+  const repeatSpecies = await db
+    .prepare(
+      `WITH repeatable(species_id, preference) AS (
+         VALUES ('pufferfish', 1), ('seahorse', 2)
+       ), inventory(species_id) AS (
+         SELECT species_id
+         FROM aquarium_creatures
+         WHERE taken_at IS NULL
+          AND species_id IN ('pufferfish', 'seahorse')
+         UNION ALL
+         SELECT species_id
+         FROM aquarium_eggs
+         WHERE hatched_at IS NULL
+          AND species_id IN ('pufferfish', 'seahorse')
+       )
+       SELECT r.species_id
+       FROM repeatable r
+       LEFT JOIN inventory i ON i.species_id = r.species_id
+       GROUP BY r.species_id, r.preference
+       ORDER BY COUNT(i.species_id), r.preference
+       LIMIT 1`,
+    )
+    .first<{ species_id: string }>();
+
+  return repeatSpecies?.species_id ?? "pufferfish";
 }
 
 function aquariumSpeciesName(speciesId: string) {
@@ -2761,7 +2829,370 @@ function aquariumSpeciesName(speciesId: string) {
   if (speciesId === "pufferfish") return "pufferfish";
   if (speciesId === "starfish") return "starfish";
   if (speciesId === "clam") return "clam";
+  if (speciesId === "happy-jellyfish") return "happy jellyfish";
+  if (speciesId === "benny-fish") return "Benny fish";
   return "aquarium friend";
+}
+
+function aquariumMoodAllowsHookCapture(mood: AquariumMood) {
+  return mood === "very_hungry" || mood === "sad";
+}
+
+function getAquariumHookCaptureProfile(mood: AquariumMood) {
+  if (mood === "very_hungry") return { cycleMs: 7 * 60_000, captureChance: 0.1 };
+  if (mood === "sad") return { cycleMs: 5 * 60_000, captureChance: 0.25 };
+  return null;
+}
+
+function getCurrentAquariumHookCycleKey(mood: AquariumMood, nowMs = Date.now()) {
+  const profile = getAquariumHookCaptureProfile(mood);
+  return profile ? `${mood}:${Math.floor(nowMs / profile.cycleMs)}` : null;
+}
+
+async function getAquariumHookCaptureRoll(cycleKey: string) {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`family-chores:aquarium-hook:${cycleKey}`),
+  );
+  return new DataView(digest).getUint32(0, false) / 0x1_0000_0000;
+}
+
+async function getAquariumHookCapture(db: D1Database, cycleKey: string) {
+  return db
+    .prepare(
+      `SELECT id, cycle_key, mood, result, reason, creature_id, message, created_at, updated_at
+       FROM aquarium_hook_captures
+       WHERE cycle_key = ?`,
+    )
+    .bind(cycleKey)
+    .first<AquariumHookCaptureRow>();
+}
+
+async function aquariumHookCaptureResponse(db: D1Database, capture: AquariumHookCaptureRow) {
+  if (capture.result === "taken") {
+    const takenCreature = capture.creature_id
+      ? await db
+          .prepare(
+            `SELECT id, species_id, growth_stage, created_at, updated_at
+             FROM aquarium_creatures
+             WHERE id = ?`,
+          )
+          .bind(capture.creature_id)
+          .first<AquariumCreatureRow>()
+      : null;
+
+    if (!takenCreature) {
+      throw new Error("A completed aquarium hook capture is missing its creature.");
+    }
+
+    return json({
+      ok: true,
+      takenCreature,
+      message: capture.message,
+      skipped: false,
+    });
+  }
+
+  if (capture.result === "reserved") {
+    throw new Error("An aquarium hook reservation was returned before it was finalized.");
+  }
+
+  return json({
+    ok: true,
+    takenCreature: null,
+    message: capture.message,
+    skipped: true,
+    reason: capture.reason,
+  });
+}
+
+async function recordAquariumHookSkip(
+  db: D1Database,
+  cycleKey: string,
+  mood: AquariumMood,
+  reason: string,
+) {
+  await db
+    .prepare(
+      `INSERT OR IGNORE INTO aquarium_hook_captures
+        (cycle_key, mood, result, reason, creature_id, message)
+       VALUES (?, ?, 'skipped', ?, NULL, NULL)`,
+    )
+    .bind(cycleKey, mood, reason)
+    .run();
+
+  const capture = await getAquariumHookCapture(db, cycleKey);
+  if (!capture) throw new Error("Could not record the aquarium hook result.");
+  return capture;
+}
+
+async function finalizeAquariumHookSkip(db: D1Database, captureId: number, reason: string) {
+  await db
+    .prepare(
+      `UPDATE aquarium_hook_captures
+       SET result = 'skipped',
+           reason = ?,
+           message = NULL,
+           updated_at = datetime('now')
+       WHERE id = ?
+        AND result = 'reserved'`,
+    )
+    .bind(reason, captureId)
+    .run();
+}
+
+async function aquariumHookCaptureIsBlocked(db: D1Database, exceptCaptureId = 0) {
+  const blocker = await db
+    .prepare(
+      `SELECT id
+       FROM aquarium_hook_captures
+       WHERE id <> ?
+        AND (
+          (result = 'taken' AND datetime(updated_at) > datetime('now', '-8 hours'))
+          OR (result = 'reserved' AND datetime(updated_at) > datetime('now', '-2 minutes'))
+        )
+       LIMIT 1`,
+    )
+    .bind(exceptCaptureId)
+    .first<{ id: number }>();
+
+  return blocker !== null;
+}
+
+async function reserveAquariumHookCapture(db: D1Database, cycleKey: string, mood: AquariumMood) {
+  await db
+    .prepare(
+      `INSERT OR IGNORE INTO aquarium_hook_captures
+        (cycle_key, mood, result, reason, creature_id, message)
+       SELECT ?, ?, 'reserved', 'reserved', c.id, NULL
+       FROM aquarium_creatures c
+       WHERE c.taken_at IS NULL
+        AND c.species_id IN ('pufferfish', 'seahorse', 'clownfish', 'angelfish', 'benny-fish')
+        AND c.id <> (
+          SELECT keeper.id
+          FROM aquarium_creatures keeper
+          WHERE keeper.species_id = c.species_id
+           AND keeper.taken_at IS NULL
+          ORDER BY datetime(keeper.created_at), keeper.id
+          LIMIT 1
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM aquarium_hook_captures blocker
+          WHERE (blocker.result = 'taken' AND datetime(blocker.updated_at) > datetime('now', '-8 hours'))
+             OR (blocker.result = 'reserved' AND datetime(blocker.updated_at) > datetime('now', '-2 minutes'))
+        )
+       ORDER BY
+        CASE c.species_id
+          WHEN 'pufferfish' THEN 1
+          WHEN 'seahorse' THEN 2
+          ELSE 3
+        END,
+        datetime(c.created_at) DESC,
+        c.id DESC
+       LIMIT 1`,
+    )
+    .bind(cycleKey, mood)
+    .run();
+
+  return getAquariumHookCapture(db, cycleKey);
+}
+
+async function finalizeAquariumHookCapture(db: D1Database, capture: AquariumHookCaptureRow) {
+  if (!capture.creature_id) {
+    await finalizeAquariumHookSkip(db, capture.id, "capture_race_lost");
+    return getAquariumHookCapture(db, capture.cycle_key);
+  }
+
+  // Re-acquire a short global reservation. This makes stale retries safe while
+  // ensuring two different browser tabs cannot complete different captures.
+  const reservation = await db
+    .prepare(
+      `UPDATE aquarium_hook_captures
+       SET updated_at = datetime('now')
+       WHERE id = ?
+        AND result = 'reserved'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM aquarium_hook_captures blocker
+          WHERE blocker.id <> ?
+           AND (
+             (blocker.result = 'taken' AND datetime(blocker.updated_at) > datetime('now', '-8 hours'))
+             OR (blocker.result = 'reserved' AND datetime(blocker.updated_at) > datetime('now', '-2 minutes'))
+           )
+        )`,
+    )
+    .bind(capture.id, capture.id)
+    .run();
+
+  if (!reservation.meta.changes) {
+    const current = await getAquariumHookCapture(db, capture.cycle_key);
+    if (current?.result === "reserved") {
+      await finalizeAquariumHookSkip(db, capture.id, "cooldown");
+    }
+    return getAquariumHookCapture(db, capture.cycle_key);
+  }
+
+  // Mood can improve while a hook animation is running, so check it again as
+  // close as possible to the destructive write.
+  const currentMood = await getCurrentAquariumMood(db);
+  if (!aquariumMoodAllowsHookCapture(currentMood)) {
+    await finalizeAquariumHookSkip(db, capture.id, "mood_not_dangerous");
+    return getAquariumHookCapture(db, capture.cycle_key);
+  }
+
+  const candidate = await db
+    .prepare(
+      `SELECT id, species_id, growth_stage, created_at, updated_at
+       FROM aquarium_creatures
+       WHERE id = ?`,
+    )
+    .bind(capture.creature_id)
+    .first<AquariumCreatureRow>();
+
+  if (!candidate) {
+    await finalizeAquariumHookSkip(db, capture.id, "capture_race_lost");
+    return getAquariumHookCapture(db, capture.cycle_key);
+  }
+
+  const message = `The hook took another ${aquariumSpeciesName(candidate.species_id)}!`;
+
+  // The first statement revalidates every safety condition at write time:
+  // active fish, hookable species, a separate oldest representative, and no
+  // competing global reservation/cooldown. The second statement only finalizes
+  // this capture if that exact reservation marked the creature.
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE aquarium_creatures
+         SET taken_at = datetime('now'),
+             taken_reason = 'fish_hook',
+             taken_hook_capture_id = ?,
+             updated_at = datetime('now')
+         WHERE id = ?
+          AND taken_at IS NULL
+          AND species_id IN ('pufferfish', 'seahorse', 'clownfish', 'angelfish', 'benny-fish')
+          AND id <> (
+            SELECT keeper.id
+            FROM aquarium_creatures keeper
+            WHERE keeper.species_id = aquarium_creatures.species_id
+             AND keeper.taken_at IS NULL
+            ORDER BY datetime(keeper.created_at), keeper.id
+            LIMIT 1
+          )
+          AND EXISTS (
+            SELECT 1
+            FROM aquarium_hook_captures owner
+            WHERE owner.id = ?
+             AND owner.creature_id = aquarium_creatures.id
+             AND owner.result = 'reserved'
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM aquarium_hook_captures blocker
+            WHERE blocker.id <> ?
+             AND (
+               (blocker.result = 'taken' AND datetime(blocker.updated_at) > datetime('now', '-8 hours'))
+               OR (blocker.result = 'reserved' AND datetime(blocker.updated_at) > datetime('now', '-2 minutes'))
+             )
+          )`,
+      )
+      .bind(capture.id, capture.creature_id, capture.id, capture.id),
+    db
+      .prepare(
+        `UPDATE aquarium_hook_captures
+         SET result = 'taken',
+             reason = 'taken',
+             message = ?,
+             updated_at = datetime('now')
+         WHERE id = ?
+          AND result = 'reserved'
+          AND EXISTS (
+            SELECT 1
+            FROM aquarium_creatures c
+            WHERE c.id = aquarium_hook_captures.creature_id
+             AND c.taken_at IS NOT NULL
+             AND c.taken_reason = 'fish_hook'
+             AND c.taken_hook_capture_id = aquarium_hook_captures.id
+          )`,
+      )
+      .bind(message, capture.id),
+  ]);
+
+  const finalized = await getAquariumHookCapture(db, capture.cycle_key);
+  if (finalized?.result === "reserved") {
+    await finalizeAquariumHookSkip(db, capture.id, "capture_race_lost");
+  }
+
+  return getAquariumHookCapture(db, capture.cycle_key);
+}
+
+async function takeAquariumFishFromHook(request: Request, db: D1Database) {
+  const body = await readJson(request);
+  const cycleKey = asAquariumHookCycleKey(body.cycleKey);
+  if (!cycleKey) {
+    return badRequest("cycleKey must be 1-128 letters, numbers, dots, colons, underscores, or hyphens.");
+  }
+
+  await ensureAquarium(db);
+  let capture = await getAquariumHookCapture(db, cycleKey);
+
+  // Completed and skipped cycles are immutable idempotency results, including
+  // retries long after the global cooldown has elapsed.
+  if (capture && capture.result !== "reserved") {
+    return aquariumHookCaptureResponse(db, capture);
+  }
+
+  const mood = await getCurrentAquariumMood(db);
+  if (!aquariumMoodAllowsHookCapture(mood)) {
+    if (capture) {
+      await finalizeAquariumHookSkip(db, capture.id, "mood_not_dangerous");
+      capture = await getAquariumHookCapture(db, cycleKey);
+    } else {
+      return json({
+        ok: true,
+        takenCreature: null,
+        message: null,
+        skipped: true,
+        reason: "mood_not_dangerous",
+      });
+    }
+
+    if (!capture || capture.result === "reserved") {
+      throw new Error("Could not finalize the aquarium hook mood check.");
+    }
+    return aquariumHookCaptureResponse(db, capture);
+  }
+
+  if (!capture) {
+    const profile = getAquariumHookCaptureProfile(mood);
+    const expectedCycleKey = getCurrentAquariumHookCycleKey(mood);
+    if (!profile || cycleKey !== expectedCycleKey) {
+      return badRequest("cycleKey is not the current dangerous aquarium hook cycle.");
+    }
+
+    const captureRoll = await getAquariumHookCaptureRoll(cycleKey);
+    if (captureRoll >= profile.captureChance) {
+      capture = await recordAquariumHookSkip(db, cycleKey, mood, "capture_roll");
+    } else {
+      capture = await reserveAquariumHookCapture(db, cycleKey, mood);
+    }
+  }
+
+  if (!capture) {
+    const reason = (await aquariumHookCaptureIsBlocked(db)) ? "cooldown" : "no_surplus_fish";
+    capture = await recordAquariumHookSkip(db, cycleKey, mood, reason);
+  }
+
+  if (capture.result === "reserved") {
+    capture = await finalizeAquariumHookCapture(db, capture);
+  }
+
+  if (!capture || capture.result === "reserved") {
+    throw new Error("Could not finalize the aquarium hook capture.");
+  }
+
+  return aquariumHookCaptureResponse(db, capture);
 }
 
 async function getResponsibleMemberId(db: D1Database, choreId: number, memberId: number) {
@@ -2978,14 +3409,11 @@ async function todayView(db: D1Database) {
         ${publicMemberNameSql("responsible")} AS responsible_member_name,
         responsible.avatar_id AS responsible_member_avatar_id,
         c.name AS chore_name,
-        cc.completed_at,
-        ds.mode AS session_mode,
-        ds.device_label
+        cc.completed_at
        FROM chore_completions cc
        JOIN family_members fm ON fm.id = cc.completed_by_member_id
        JOIN chores c ON c.id = cc.chore_id
        LEFT JOIN family_members responsible ON responsible.id = cc.responsible_member_id
-       LEFT JOIN device_sessions ds ON ds.id = cc.device_session_id
        WHERE cc.completed_at >= ?
         AND cc.completed_at < ?
        ORDER BY cc.completed_at DESC
@@ -3088,9 +3516,6 @@ async function recordCompletion(request: Request, env: Env, ctx: ExecutionContex
   const body = await readJson(request);
   const memberId = asPositiveInteger(body.memberId);
   const choreId = asPositiveInteger(body.choreId);
-  const deviceSessionId = asPositiveInteger(body.deviceSessionId);
-  const sessionMode = isSessionMode(body.sessionMode) ? body.sessionMode : "member";
-  const deviceLabel = typeof body.deviceLabel === "string" ? body.deviceLabel.slice(0, 80) : null;
   const notes = typeof body.notes === "string" && body.notes.trim() ? body.notes.trim() : null;
   const points = 1;
 
@@ -3115,8 +3540,7 @@ async function recordCompletion(request: Request, env: Env, ctx: ExecutionContex
     return badRequest("That chore is not assigned to this member.");
   }
 
-  const completionSessionId =
-    deviceSessionId ?? (await createDeviceSession(db, sessionMode, sessionMode === "member" ? memberId : null, deviceLabel));
+  const completionSessionId = await createDeviceSession(db, "kiosk", null, "Shared aquarium");
 
   const result = await db
     .prepare(
@@ -3271,63 +3695,17 @@ async function recentCompletions(db: D1Database) {
         responsible.avatar_id AS responsible_member_avatar_id,
         c.name AS chore_name,
         cc.completed_at,
-        ds.mode AS session_mode,
-        ds.device_label,
         cc.notes
        FROM chore_completions cc
        JOIN family_members fm ON fm.id = cc.completed_by_member_id
        JOIN chores c ON c.id = cc.chore_id
        LEFT JOIN family_members responsible ON responsible.id = cc.responsible_member_id
-       LEFT JOIN device_sessions ds ON ds.id = cc.device_session_id
        ORDER BY cc.completed_at DESC
        LIMIT 50`,
     )
     .all();
 
   return json({ ok: true, completions: results });
-}
-
-async function selectMemberSession(request: Request, db: D1Database) {
-  const body = await readJson(request);
-  const memberId = asPositiveInteger(body.memberId);
-  const deviceLabel = typeof body.deviceLabel === "string" ? body.deviceLabel.slice(0, 80) : "Personal Device";
-
-  if (!memberId) {
-    return badRequest("memberId is required.");
-  }
-
-  const member = await getActiveMember(db, memberId);
-  if (!member) {
-    return badRequest("Member was not found.");
-  }
-
-  const id = await createDeviceSession(db, "member", memberId, deviceLabel);
-
-  return json({
-    ok: true,
-    session: {
-      id,
-      mode: "member",
-      memberId,
-      deviceLabel,
-    },
-  });
-}
-
-async function kioskSession(request: Request, db: D1Database) {
-  const body = await readJson(request);
-  const deviceLabel = typeof body.deviceLabel === "string" ? body.deviceLabel.slice(0, 80) : "Kitchen Tablet";
-  const id = await createDeviceSession(db, "kiosk", null, deviceLabel);
-
-  return json({
-    ok: true,
-    session: {
-      id,
-      mode: "kiosk",
-      memberId: null,
-      deviceLabel,
-    },
-  });
 }
 
 async function saveMember(request: Request, db: D1Database, id: number | null) {
@@ -3675,6 +4053,7 @@ async function exportData(db: D1Database) {
     notes,
     aquariumState,
     aquariumCreatures,
+    aquariumHookCaptures,
     aquariumEggs,
     aquariumEvents,
     appSettings,
@@ -3687,6 +4066,7 @@ async function exportData(db: D1Database) {
     db.prepare("SELECT * FROM household_notes ORDER BY updated_at DESC, id DESC").all(),
     db.prepare("SELECT * FROM aquarium_state WHERE id = 1").all(),
     db.prepare("SELECT * FROM aquarium_creatures ORDER BY created_at, id").all(),
+    db.prepare("SELECT * FROM aquarium_hook_captures ORDER BY created_at DESC, id DESC").all(),
     db.prepare("SELECT * FROM aquarium_eggs ORDER BY created_at, id").all(),
     db.prepare("SELECT * FROM aquarium_events ORDER BY created_at DESC, id DESC LIMIT 500").all(),
     getAppSettings(db),
@@ -3703,6 +4083,7 @@ async function exportData(db: D1Database) {
     notes: notes.results,
     aquariumState: aquariumState.results,
     aquariumCreatures: aquariumCreatures.results,
+    aquariumHookCaptures: aquariumHookCaptures.results,
     aquariumEggs: aquariumEggs.results,
     aquariumEvents: aquariumEvents.results,
     appSettings,
@@ -4016,6 +4397,10 @@ async function handleApiRequest(request: Request, env: Env, ctx: ExecutionContex
       return listAquarium(env.DB, env);
     }
 
+    if (request.method === "POST" && url.pathname === "/api/aquarium/hook-take") {
+      return takeAquariumFishFromHook(request, env.DB);
+    }
+
     if (request.method === "GET" && url.pathname === "/api/notes") {
       return listNotes(env.DB);
     }
@@ -4043,10 +4428,6 @@ async function handleApiRequest(request: Request, env: Env, ctx: ExecutionContex
       return recordCompletion(request, env, ctx);
     }
 
-    if (request.method === "GET" && url.pathname === "/api/completions/recent") {
-      return recentCompletions(env.DB);
-    }
-
     if (request.method === "GET" && url.pathname === "/api/story/scenes") {
       return json(await getAllStoryScenes(env.DB, url.searchParams.get("slug")));
     }
@@ -4057,20 +4438,16 @@ async function handleApiRequest(request: Request, env: Env, ctx: ExecutionContex
       return json(await getStoryForMember(env.DB, memberId));
     }
 
-    if (request.method === "POST" && url.pathname === "/api/session/select-member") {
-      return selectMemberSession(request, env.DB);
-    }
-
-    if (request.method === "POST" && url.pathname === "/api/session/kiosk") {
-      return kioskSession(request, env.DB);
-    }
-
     if (url.pathname.startsWith("/api/admin/") && !requireParentPin(request, env)) {
       return unauthorized();
     }
 
     if (request.method === "GET" && url.pathname === "/api/admin/members") {
       return listMembers(env.DB, true, true);
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/admin/completions") {
+      return recentCompletions(env.DB);
     }
 
     if (request.method === "POST" && url.pathname === "/api/admin/members") {

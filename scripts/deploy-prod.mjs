@@ -66,6 +66,10 @@ function verifyWorkerSecrets() {
 
 verifyWorkerSecrets()
 
+// Apply additive D1 schema changes before publishing Worker code that expects
+// them. Wrangler captures a remote backup and rolls back a failing migration.
+run('npx wrangler d1 migrations apply family-chores --remote --config worker/wrangler.toml')
+
 // TWILIO_ACCOUNT_SID is configured as a dashboard-managed Worker variable.
 // Preserve dashboard bindings so deploys do not drop it while still keeping
 // secret values out of the repository.

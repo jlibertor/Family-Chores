@@ -1,51 +1,38 @@
 # Testing
 
-Keep testing lightweight while the app is small.
-
-## Local Checks
-
-Run the normal build and lint checks:
+Run the normal checks from the repository root:
 
 ```bash
 npm run build
 npm run lint
+npm --workspace frontend test
 ```
 
-## API Smoke Checks
-
-Start the Worker:
+For API smoke checks, start the local Worker, apply migrations when necessary, and run:
 
 ```bash
 npm run dev:worker
-```
-
-Apply local D1 migrations if needed:
-
-```bash
 npx wrangler d1 migrations apply family-chores --local --config worker/wrangler.toml
-```
-
-Run smoke checks:
-
-```bash
 npm run smoke
 ```
 
-The smoke script verifies:
+The smoke script verifies public household data, parent PIN protection, setup mutations, a completion submitted without login/session metadata, the aquarium response, and recent history. It writes disposable test rows, so use a local or disposable database when a clean history matters.
 
-- health endpoint
-- active members
-- active chores
-- today endpoint
-- household status endpoint
-- admin PIN gate
-- family member create and safe delete
-- household notes
-- lightweight export
-- display and notes screens
-- household rhythm and quick actions
-- kiosk session creation
-- completion insert
-- recent history
+Manual acceptance focuses on the shared happy path:
 
-The smoke script inserts one chore completion row. Use a disposable local D1 database when a clean history matters.
+1. `/aquarium` loads without choosing a device mode or person.
+2. **Record chore** opens `/record` and asks who finished it.
+3. Selecting a person shows that person's relevant chores.
+4. Confirming returns to the aquarium and shows the completion reaction.
+5. **Parent** always shows the PIN gate until successfully unlocked.
+6. Reports are unavailable before PIN unlock and show participation after unlock.
+7. Retired URLs such as `/choose-mode`, `/member`, `/kiosk`, and `/history` fall back to the aquarium.
+
+For aquarium mood QA, enable **Test mode** in Parent setup. The aquarium then shows controls for feeding, a hook drop, and the mood-appropriate mystery event. A test-only `tankMood` query parameter can preview any whole-tank state without changing household data, for example `/aquarium?tankMood=happy` or `/aquarium?tankMood=sad`. The override is ignored whenever Test mode is off.
+
+For tank-tap QA, tap the same area six times at a relaxed one-to-two-second
+rhythm. The first response should be a small flinch, the second a cautious
+approach, and later taps should gather the fish progressively closer without an
+alternating flee/return pattern. Pause for a few seconds and tap again; the fish
+should retain some familiarity. Repeat in `happy` and `sad` previews to confirm
+that mood changes response speed without changing the curiosity progression.

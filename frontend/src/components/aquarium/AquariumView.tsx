@@ -1,7 +1,29 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties } from 'react'
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
+import {
+  CreatureArt,
+  aquariumSpeciesIds,
+  aquariumSpeciesLabels,
+  isAquariumSpecies,
+  type AquariumMood,
+} from './CreatureArt'
+import {
+  fishHookActiveMs,
+  getAutomaticFishHookCycle,
+  getFishHookPosition,
+  type AutomaticFishHookCycle,
+  type ManualFishHookDrop,
+} from './fishHook'
+import {
+  getTankReactionSpeed,
+  getTankReactionTarget,
+  registerTankTap,
+  type TankInteraction,
+} from './tankInteraction'
+import { getTankMoodBehavior } from './tankMood'
 
-export type AquariumMood = 'happy' | 'content' | 'peckish' | 'hungry' | 'very_hungry' | 'sad'
+export { CreatureArt } from './CreatureArt'
+export type { AquariumMood } from './CreatureArt'
 export type AquariumGrowthStage = 'baby' | 'adult'
 export type AquariumLeaderboardRange = 'today' | 'yesterday' | 'allTime'
 
@@ -155,24 +177,12 @@ type FeedingFrenzy = {
   surfaceY: number
 }
 
-type ManualFishHookDrop = {
-  startedAt: number
-  hasWorm: boolean
-}
-
-type FishHookPosition = {
-  visible: boolean
-  x: number
-  y: number
-  attraction: number
-  hasWorm: boolean
-}
-
 type BubbleBurst = {
   id: number
   x: number
   y: number
   size: number
+  tone?: 'gold' | 'murk'
 }
 
 type FallingFood = {
@@ -198,6 +208,27 @@ type FloatingHeart = {
   y: number
   size: number
   delayMs: number
+}
+
+type TankSurpriseKind = 'disco-pearl' | 'old-boot'
+
+type TankSurprise = {
+  id: number
+  kind: TankSurpriseKind
+  startedAt: number
+  until: number
+}
+
+export type AquariumHookCapture = {
+  creature: AquariumCreature
+  message: string
+}
+
+type TankPointerStart = {
+  pointerId: number
+  clientX: number
+  clientY: number
+  localY: number
 }
 
 const tankBubbleAudioSources = [
@@ -236,6 +267,13 @@ const fishHookHappyAudioSources = [
   '/sounds/fish/small_creature_happy_%234.mp3',
 ]
 
+const mournAudioSources = [
+  '/sounds/bugs/bug-mourn-cry-1.mp3',
+  '/sounds/bugs/bug-mourn-cry-2.mp3',
+  '/sounds/bugs/bug-mourn-cry-3.mp3',
+  '/sounds/bugs/bug-mourn-cry-4.mp3',
+]
+
 const unlockableAudioSources = [
   ...tankBubbleAudioSources,
   ...fishFeedingAudioSources,
@@ -243,11 +281,12 @@ const unlockableAudioSources = [
   ...hungryFishAudioSources,
   ...fishHappyNowAudioSources,
   ...fishHookHappyAudioSources,
+  ...mournAudioSources,
 ]
 
-const hungryMoods = new Set<AquariumMood>(['hungry', 'very_hungry', 'sad'])
-
 const htmlAudioCache = new Map<string, HTMLAudioElement>()
+let htmlAudioUnlocked = false
+let htmlAudioUnlockInFlight = false
 
 function getHtmlAudio(source: string) {
   let audio = htmlAudioCache.get(source)
@@ -260,6 +299,11 @@ function getHtmlAudio(source: string) {
 }
 
 function unlockHtmlAudio() {
+  if (htmlAudioUnlocked || htmlAudioUnlockInFlight) return
+  htmlAudioUnlockInFlight = true
+  let unlockedCount = 0
+  let settledCount = 0
+
   for (const source of unlockableAudioSources) {
     const audio = getHtmlAudio(source)
     const originalMuted = audio.muted
@@ -268,6 +312,7 @@ function unlockHtmlAudio() {
     audio.volume = 0
     void audio.play()
       .then(() => {
+        unlockedCount += 1
         audio.pause()
         audio.currentTime = 0
         audio.muted = originalMuted
@@ -276,6 +321,12 @@ function unlockHtmlAudio() {
       .catch(() => {
         audio.muted = originalMuted
         audio.volume = originalVolume
+      })
+      .finally(() => {
+        settledCount += 1
+        if (settledCount !== unlockableAudioSources.length) return
+        htmlAudioUnlocked = unlockedCount > 0
+        htmlAudioUnlockInFlight = false
       })
   }
 }
@@ -334,17 +385,7 @@ function playFeedChime() {
   })
 }
 
-const aquariumSpecies = ['clownfish', 'seahorse', 'angelfish', 'crab', 'pufferfish', 'starfish', 'clam'] as const
-
-const speciesLabels: Record<string, string> = {
-  clownfish: 'Clownfish',
-  angelfish: 'Angelfish',
-  seahorse: 'Seahorse',
-  crab: 'Crab',
-  pufferfish: 'Pufferfish',
-  starfish: 'Starfish',
-  clam: 'Clam',
-}
+const aquariumSpecies = aquariumSpeciesIds
 
 const moodLabels: Record<AquariumMood, string> = {
   happy: '😄 HAPPY',
@@ -355,19 +396,37 @@ const moodLabels: Record<AquariumMood, string> = {
   sad: '🚨 STARVING',
 }
 
-const moodSpeed: Record<AquariumMood, number> = {
-  happy: 1.12,
-  content: 0.88,
-  peckish: 0.76,
-  hungry: 0.68,
-  very_hungry: 0.48,
-  sad: 0.28,
+const subtleMoodLabels: Record<AquariumMood, string> = {
+  happy: 'Happy',
+  content: 'Content',
+  peckish: 'Peckish',
+  hungry: 'Hungry',
+  very_hungry: 'Very hungry',
+  sad: 'Needs care',
 }
 
-const fishHookCycleMs = 15 * 60_000
-const fishHookLowerMs = 3_600
-const fishHookHoldMs = 20_000
-const fishHookRetractMs = 3_400
+const aquariumMoodValues = new Set<AquariumMood>(['happy', 'content', 'peckish', 'hungry', 'very_hungry', 'sad'])
+
+function isAquariumMood(value: string | null): value is AquariumMood {
+  return value !== null && aquariumMoodValues.has(value as AquariumMood)
+}
+
+const sparkleField = Array.from({ length: 26 }, (_, index) => ({
+  id: index,
+  x: 4 + ((index * 37) % 92),
+  y: 5 + ((index * 53) % 82),
+  size: 7 + ((index * 11) % 15),
+  delayMs: -((index * 317) % 3200),
+  durationMs: 1500 + ((index * 191) % 1700),
+}))
+
+const murkField = Array.from({ length: 14 }, (_, index) => ({
+  id: index,
+  x: 3 + ((index * 29) % 94),
+  y: 12 + ((index * 47) % 74),
+  size: 16 + ((index * 17) % 38),
+  delayMs: -((index * 431) % 5600),
+}))
 
 function randomBetween(min: number, max: number) {
   return min + Math.random() * (max - min)
@@ -379,7 +438,13 @@ function getCreatureSize(creature: AquariumCreature, tankWidth: number) {
   const size = Math.round(Math.min(Math.max(responsiveSize, baseSize * 0.82), baseSize * 1.22))
   // The clam is a chunky bottom-dweller — a touch bigger than the fish.
   if (creature.species_id === 'clam') return Math.round(size * 1.14)
+  if (creature.species_id === 'happy-jellyfish') return Math.round(size * 1.08)
+  if (creature.species_id === 'benny-fish') return Math.round(size * 1.05)
   return size
+}
+
+function getCreatureCruiseSpeed(speciesId: string) {
+  return speciesId === 'happy-jellyfish' ? randomBetween(0.012, 0.026) : randomBetween(0.018, 0.042)
 }
 
 function pickTarget(width: number, height: number, spriteSize: number) {
@@ -395,19 +460,12 @@ function pickTarget(width: number, height: number, spriteSize: number) {
 }
 
 function displaySpecies(speciesId: string) {
-  return speciesLabels[speciesId] ?? 'Aquarium friend'
+  return isAquariumSpecies(speciesId) ? aquariumSpeciesLabels[speciesId] : 'Aquarium friend'
 }
 
 function formatPercent(value: number, max: number) {
   if (max <= 0) return 0
   return Math.max(0, Math.min(100, Math.round((value / max) * 100)))
-}
-
-function formatLastFed(hoursSinceFed: number) {
-  if (hoursSinceFed <= 1) return 'less than an hour ago'
-  if (hoursSinceFed < 24) return `${hoursSinceFed} hours ago`
-  const days = Math.floor(hoursSinceFed / 24)
-  return `${days} day${days === 1 ? '' : 's'} ago`
 }
 
 function formatDiscoveryDate(value: string) {
@@ -416,40 +474,57 @@ function formatDiscoveryDate(value: string) {
 
 export function AquariumView({
   aquarium,
+  immersive,
   onRecord,
-  onFriends,
-  onPanic,
-  onEverythingGood,
-  onTextMode,
-  onDebug,
-  textModeSubmitting,
+  onEnterImmersive,
+  onExitImmersive,
+  onHookTake,
+  onHookCaptureFinished,
   fishTextActiveUntil,
   testMode,
 }: {
   aquarium: AquariumData | null
+  immersive: boolean
   fishTextActiveUntil: string | null
   onRecord: () => void
-  onFriends: () => void
-  onPanic: () => void
-  onEverythingGood: () => void
-  onTextMode: () => void
-  onDebug: () => void
-  textModeSubmitting: boolean
+  onEnterImmersive: () => void
+  onExitImmersive: () => void
+  onHookTake: (cycleKey: string) => Promise<AquariumHookCapture | null>
+  onHookCaptureFinished: (capture: AquariumHookCapture) => void
   testMode: boolean
 }) {
   const [leaderboardRange, setLeaderboardRange] = useState<AquariumLeaderboardRange>('today')
   const testFeedHandlerRef = useRef<() => void>(() => undefined)
   const testHookHandlerRef = useRef<() => void>(() => undefined)
+  const testSurpriseHandlerRef = useRef<() => void>(() => undefined)
   const setTestFeedHandler = useCallback((handler: () => void) => {
     testFeedHandlerRef.current = handler
   }, [])
   const setTestHookHandler = useCallback((handler: () => void) => {
     testHookHandlerRef.current = handler
   }, [])
+  const setTestSurpriseHandler = useCallback((handler: () => void) => {
+    testSurpriseHandlerRef.current = handler
+  }, [])
+
+  useEffect(() => {
+    if (!immersive) return undefined
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = previousOverflow
+    }
+  }, [immersive])
 
   if (!aquarium) {
     return (
-      <section className="screen aquarium-screen">
+      <section className={`screen aquarium-screen${immersive ? ' aquarium-immersive' : ''}`}>
+        {immersive && (
+          <button type="button" className="aquarium-immersive-exit" onClick={onExitImmersive} aria-label="Exit full-screen aquarium">
+            <span aria-hidden="true">⌃</span>
+            Exit tank
+          </button>
+        )}
         <section className="aquarium-loading-panel">
           <h1>Family Aquarium</h1>
           <p>Filling the tank...</p>
@@ -459,6 +534,8 @@ export function AquariumView({
   }
 
   const foodPercent = formatPercent(aquarium.state.food_reserve, aquarium.state.max_food_reserve)
+  const requestedTestMood = testMode ? new URLSearchParams(window.location.search).get('tankMood') : null
+  const tankMood = isAquariumMood(requestedTestMood) ? requestedTestMood : aquarium.state.mood
   const leaderboard = aquarium.leaderboard[leaderboardRange] ?? []
   const pendingEggs = aquarium.eggs ?? []
   const milestoneRemainder = aquarium.state.total_chore_completions % aquarium.state.creature_unlock_interval
@@ -467,21 +544,40 @@ export function AquariumView({
       ? aquarium.state.creature_unlock_interval
       : aquarium.state.creature_unlock_interval - milestoneRemainder
   const displayCreatures = aquarium.creatures.length > 0 ? aquarium.creatures : [starterClownfish]
-  const lastFed = formatLastFed(aquarium.state.hours_since_fed)
 
   return (
-    <section className={`screen aquarium-screen aquarium-mood-${aquarium.state.mood}`}>
+    <section className={`screen aquarium-screen aquarium-mood-${tankMood}${immersive ? ' aquarium-immersive' : ''}`}>
       <section className="aquarium-stage">
         <AquariumScene
           creatures={displayCreatures}
           eggs={pendingEggs}
-          mood={aquarium.state.mood}
+          mood={tankMood}
           events={aquarium.events}
           fishTextActiveUntil={fishTextActiveUntil}
+          immersive={immersive}
+          onExitImmersive={onExitImmersive}
+          onHookTake={onHookTake}
+          onHookCaptureFinished={onHookCaptureFinished}
           onTestFeedReady={setTestFeedHandler}
           onTestHookReady={setTestHookHandler}
+          onTestSurpriseReady={setTestSurpriseHandler}
         />
-        {testMode && (
+        <div className="aquarium-mood-chip" aria-live="polite" aria-label={`Aquarium mood: ${moodLabels[tankMood]}`}>
+          <span aria-hidden="true" />
+          <strong>{subtleMoodLabels[tankMood]}</strong>
+        </div>
+        {immersive && (
+          <>
+            <button type="button" className="aquarium-immersive-exit" onClick={onExitImmersive} aria-label="Exit full-screen aquarium">
+              <span aria-hidden="true">⌃</span>
+              Exit tank
+            </button>
+            <div className="aquarium-immersive-hint" aria-hidden="true">
+              Tap the water to play · tap the top edge or swipe up to leave
+            </div>
+          </>
+        )}
+        {testMode && !immersive && (
           <div className="aquarium-test-actions">
             <button type="button" className="secondary-action" onClick={() => testFeedHandlerRef.current()}>
               Test feed fish
@@ -489,14 +585,13 @@ export function AquariumView({
             <button type="button" className="secondary-action" onClick={() => testHookHandlerRef.current()}>
               Test fish hook
             </button>
+            <button type="button" className="secondary-action" onClick={() => testSurpriseHandlerRef.current()}>
+              Test tank surprise
+            </button>
           </div>
         )}
 
         <div className="aquarium-status-strip" aria-live="polite">
-          <div>
-            <span>Mood</span>
-            <strong>{moodLabels[aquarium.state.mood]}</strong>
-          </div>
           <div>
             <span>Nursery</span>
             <strong>{foodPercent}%</strong>
@@ -509,12 +604,6 @@ export function AquariumView({
       </section>
 
       <aside className="aquarium-side-panel">
-        <section className="aquarium-summary">
-          <h1>{moodLabels[aquarium.state.mood]}</h1>
-          <p>{aquarium.state.mood_message}</p>
-          <p>Last fed {lastFed}.</p>
-        </section>
-
         <section className="aquarium-food-card">
           <div className="aquarium-card-heading">
             <h2>🐠 Nursery</h2>
@@ -541,9 +630,18 @@ export function AquariumView({
           </section>
         )}
 
-        <section className="aquarium-leaderboard">
-          <div className="aquarium-card-heading">
-            <h2>Family helpers</h2>
+        <div className="aquarium-action-grid">
+          <button type="button" className="secondary-action aquarium-enter-immersive" onClick={onEnterImmersive}>
+            Full tank
+          </button>
+          <button type="button" className="primary-action" onClick={onRecord}>
+            Record a chore
+          </button>
+        </div>
+
+        <details className="aquarium-side-details">
+          <summary>Family helpers</summary>
+          <div className="aquarium-details-content">
             <div className="segmented-control compact-segmented" aria-label="Leaderboard range">
               <button
                 type="button"
@@ -567,47 +665,25 @@ export function AquariumView({
                 All Time
               </button>
             </div>
+            <div className="aquarium-helper-list">
+              {leaderboard.map((helper, index) => (
+                <span key={helper.member_id} className="aquarium-helper-row">
+                  <strong>{index + 1}. {helper.member_name}</strong>
+                  <span>{helper.completed_count}</span>
+                </span>
+              ))}
+            </div>
           </div>
-          <div className="aquarium-helper-list">
-            {leaderboard.map((helper, index) => (
-              <span key={helper.member_id} className="aquarium-helper-row">
-                <strong>{index + 1}. {helper.member_name}</strong>
-                <span>{helper.completed_count}</span>
-              </span>
-            ))}
-          </div>
-        </section>
+        </details>
 
-        <section className="aquarium-event-card">
-          <h2>Latest ripples</h2>
-          <div className="aquarium-event-list">
-            {aquarium.events.length === 0 && <p>No feedings yet.</p>}
-            {aquarium.events.slice(0, 3).map((event) => (
-              <span key={event.id}>{event.message}</span>
-            ))}
+        <details className="aquarium-side-details">
+          <summary>Latest activity</summary>
+          <div className="aquarium-details-content aquarium-event-list">
+            {aquarium.events.length === 0 && <p>Quiet water.</p>}
+            {aquarium.events.slice(0, 3).map((event) => <span key={event.id}>{event.message}</span>)}
           </div>
-        </section>
+        </details>
 
-        <button type="button" className="primary-action aquarium-record-action" onClick={onRecord}>
-          Record a chore
-        </button>
-        <button type="button" className="secondary-action aquarium-record-action" onClick={onFriends}>
-          Aquarium friends
-        </button>
-        <button type="button" className="danger-action aquarium-record-action" onClick={onPanic}>
-          {aquarium.state.panic_mode ? `🚨 Panic active — ${aquarium.state.panic_chores_needed} chore${aquarium.state.panic_chores_needed === 1 ? '' : 's'} to go` : '🚨 Panic mode'}
-        </button>
-        <button type="button" className="secondary-action aquarium-record-action" onClick={onEverythingGood}>
-          {aquarium.state.everything_good_until ? '✅ Everything good active' : '✅ Everything good'}
-        </button>
-        {testMode && (
-          <button type="button" className="secondary-action aquarium-text-action" onClick={onTextMode} disabled={textModeSubmitting}>
-            {textModeSubmitting ? 'Texting' : 'Test Text'}
-          </button>
-        )}
-        <button type="button" className="aquarium-debug-link" onClick={onDebug}>
-          Fish mood math
-        </button>
       </aside>
     </section>
   )
@@ -676,37 +752,75 @@ function AquariumScene({
   mood,
   events,
   fishTextActiveUntil,
+  immersive,
+  onExitImmersive,
+  onHookTake,
+  onHookCaptureFinished,
   onTestFeedReady,
   onTestHookReady,
+  onTestSurpriseReady,
 }: {
   creatures: AquariumCreature[]
   eggs: AquariumEgg[]
   mood: AquariumMood
   events: AquariumEvent[]
   fishTextActiveUntil: string | null
+  immersive: boolean
+  onExitImmersive: () => void
+  onHookTake: (cycleKey: string) => Promise<AquariumHookCapture | null>
+  onHookCaptureFinished: (capture: AquariumHookCapture) => void
   onTestFeedReady: (handler: () => void) => void
   onTestHookReady: (handler: () => void) => void
+  onTestSurpriseReady: (handler: () => void) => void
 }) {
   const tankRef = useRef<HTMLDivElement | null>(null)
   const phoneRef = useRef<HTMLDivElement | null>(null)
   const hookRef = useRef<HTMLDivElement | null>(null)
   const spriteRefs = useRef(new Map<number, HTMLDivElement>())
   const swimmersRef = useRef(new Map<number, Swimmer>())
+  const tankInteractionRef = useRef<TankInteraction | null>(null)
+  const tankInteractionWasActiveRef = useRef(false)
+  const tankPointerStartRef = useRef<TankPointerStart | null>(null)
   const frameRef = useRef<number | null>(null)
   const lastTimeRef = useRef(0)
   const latestEventIdRef = useRef<number | null>(null)
   const fishTextActiveUntilRef = useRef<number | null>(null)
   const fishTextWasActiveRef = useRef(false)
   const feedingFrenzyRef = useRef<FeedingFrenzy | null>(null)
+  const tankSurpriseRef = useRef<TankSurprise | null>(null)
   const manualFishHookRef = useRef<ManualFishHookDrop | null>(null)
-  const hookHappySoundPlayedRef = useRef(false)
-  const bubbleTimeoutsRef = useRef<number[]>([])
+  const automaticFishHookRef = useRef<AutomaticFishHookCycle | null>(null)
+  const hookSoundPlayedRef = useRef(false)
+  const hookTakeRequestedCyclesRef = useRef(new Set<string>())
+  const hookCaptureRef = useRef<AquariumHookCapture | null>(null)
+  const sceneMountedRef = useRef(true)
+  const onHookTakeRef = useRef(onHookTake)
+  const onHookCaptureFinishedRef = useRef(onHookCaptureFinished)
+  const bubbleTimeoutsRef = useRef(new Set<number>())
   const [size, setSize] = useState({ width: 0, height: 0 })
   const [bursts, setBursts] = useState<BubbleBurst[]>([])
   const [food, setFood] = useState<FallingFood[]>([])
   const [ambientBubbles, setAmbientBubbles] = useState<AmbientBubble[]>([])
   const [hearts, setHearts] = useState<FloatingHeart[]>([])
   const [feedNotice, setFeedNotice] = useState('')
+  const [tankSurprise, setTankSurprise] = useState<TankSurprise | null>(null)
+
+  useEffect(() => {
+    onHookTakeRef.current = onHookTake
+    onHookCaptureFinishedRef.current = onHookCaptureFinished
+  }, [onHookCaptureFinished, onHookTake])
+
+  useEffect(() => {
+    sceneMountedRef.current = true
+    return () => {
+      sceneMountedRef.current = false
+      if (hookCaptureRef.current) {
+        const capture = hookCaptureRef.current
+        hookCaptureRef.current = null
+        onHookCaptureFinishedRef.current(capture)
+      }
+    }
+  }, [])
 
   // Browsers block audio until the page is touched once; warming the audio
   // context and MP3 elements on first interaction makes delayed sounds work.
@@ -730,24 +844,49 @@ function AquariumScene({
   }, [fishTextActiveUntil])
 
   useEffect(() => {
-    const intervalId = window.setInterval(() => {
-      playAudioFrom(tankBubbleAudioSources, 0.18)
-    }, 7 * 60 * 1000)
-
-    return () => window.clearInterval(intervalId)
-  }, [])
-
-  // Hungry fish calls stay sparse so the shared display does not get noisy.
-  useEffect(() => {
-    if (!hungryMoods.has(mood)) return undefined
-
-    const intervalId = window.setInterval(() => {
-      playAudioFrom(hungryFishAudioSources, 0.32)
-    }, 8 * 60 * 1000)
-
-    return () => {
-      window.clearInterval(intervalId)
+    let timeoutId = 0
+    const schedule = () => {
+      const delay = mood === 'happy' ? randomBetween(2, 4) * 60_000 : randomBetween(5, 9) * 60_000
+      timeoutId = window.setTimeout(() => {
+        if (document.visibilityState === 'visible') {
+          playAudioFrom(tankBubbleAudioSources, mood === 'happy' ? 0.24 : 0.16)
+        }
+        schedule()
+      }, delay)
     }
+    schedule()
+    return () => window.clearTimeout(timeoutId)
+  }, [mood])
+
+  // The full mood scale has a voice: delighted chirps at the top, increasingly
+  // tired complaints and low moans as the tank falls toward panic.
+  useEffect(() => {
+    const behavior = getTankMoodBehavior(mood)
+    if (behavior.vocalStyle === 'quiet') return undefined
+
+    let timeoutId = 0
+    let firstCall = true
+    const schedule = () => {
+      const normalDelay = randomBetween(behavior.vocalIntervalMinMs, behavior.vocalIntervalMaxMs)
+      const delay = firstCall
+        ? Math.min(normalDelay, mood === 'sad' ? randomBetween(8_000, 18_000) : mood === 'happy' ? randomBetween(16_000, 32_000) : normalDelay)
+        : normalDelay
+      firstCall = false
+      timeoutId = window.setTimeout(() => {
+        if (document.visibilityState === 'visible') {
+          if (behavior.vocalStyle === 'delight') {
+            playAudioFrom(fishHookHappyAudioSources, behavior.vocalVolume)
+          } else if (behavior.vocalStyle === 'moan' && Math.random() < 0.42) {
+            playAudioFrom(mournAudioSources, behavior.vocalVolume)
+          } else {
+            playAudioFrom(hungryFishAudioSources, behavior.vocalVolume)
+          }
+        }
+        schedule()
+      }, delay)
+    }
+    schedule()
+    return () => window.clearTimeout(timeoutId)
   }, [mood])
 
   useEffect(() => {
@@ -762,6 +901,79 @@ function AquariumScene({
     observer.observe(tankRef.current)
     return () => observer.disconnect()
   }, [])
+
+  const triggerTankTap = useCallback((x: number, y: number) => {
+    tankInteractionRef.current = registerTankTap(tankInteractionRef.current, x, y, performance.now())
+  }, [])
+
+  const handleTankPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return
+    const target = event.target
+    if (target instanceof Element && target.closest('[data-aquarium-control]')) return
+
+    const rect = event.currentTarget.getBoundingClientRect()
+    tankPointerStartRef.current = {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      localY: event.clientY - rect.top,
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }, [])
+
+  const handleTankPointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const start = tankPointerStartRef.current
+    if (!start || start.pointerId !== event.pointerId) return
+    tankPointerStartRef.current = null
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+
+    const rect = event.currentTarget.getBoundingClientRect()
+    const deltaX = event.clientX - start.clientX
+    const deltaY = event.clientY - start.clientY
+    const travel = Math.hypot(deltaX, deltaY)
+    const topExitDepth = Math.max(54, rect.height * 0.07)
+    const bottomExitDepth = Math.max(84, rect.height * 0.16)
+
+    if (immersive && start.localY <= topExitDepth && travel <= 24) {
+      onExitImmersive()
+      return
+    }
+
+    if (
+      immersive
+      && start.localY >= rect.height - bottomExitDepth
+      && deltaY <= -72
+      && Math.abs(deltaY) > Math.abs(deltaX) * 1.15
+    ) {
+      onExitImmersive()
+      return
+    }
+
+    if (travel > 24) return
+    const x = Math.min(Math.max(event.clientX - rect.left, 0), rect.width)
+    const y = Math.min(Math.max(event.clientY - rect.top, 0), rect.height)
+    triggerTankTap(x, y)
+  }, [immersive, onExitImmersive, triggerTankTap])
+
+  const handleTankPointerCancel = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (tankPointerStartRef.current?.pointerId === event.pointerId) {
+      tankPointerStartRef.current = null
+    }
+  }, [])
+
+  const handleTankKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape' && immersive) {
+      event.preventDefault()
+      onExitImmersive()
+      return
+    }
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    triggerTankTap(size.width / 2, size.height / 2)
+  }, [immersive, onExitImmersive, size.height, size.width, triggerTankTap])
 
   const startFeedingAnimation = useCallback((message: string, seedId: number) => {
     if (size.width <= 0 || size.height <= 0) return
@@ -779,11 +991,11 @@ function AquariumScene({
     setFeedNotice(message)
     playAudioFrom(fishFeedingAudioSources, 0.48)
     const noticeTimeout = window.setTimeout(() => setFeedNotice(''), 3600)
-    bubbleTimeoutsRef.current.push(noticeTimeout)
+    bubbleTimeoutsRef.current.add(noticeTimeout)
     const happySoundTimeout = window.setTimeout(() => {
       playAudioFrom(fishHappyNowAudioSources, 0.44)
     }, 9000)
-    bubbleTimeoutsRef.current.push(happySoundTimeout)
+    bubbleTimeoutsRef.current.add(happySoundTimeout)
 
     const foodDrops = Array.from({ length: 34 }, (_, index) => ({
       id: seedId * 1000 + index,
@@ -807,7 +1019,7 @@ function AquariumScene({
     const foodTimeout = window.setTimeout(() => {
       setFood((current) => current.filter((item) => !foodDrops.some((drop) => drop.id === item.id)))
     }, 5200)
-    bubbleTimeoutsRef.current.push(foodTimeout)
+    bubbleTimeoutsRef.current.add(foodTimeout)
   }, [size.height, size.width])
 
   useEffect(() => {
@@ -815,12 +1027,106 @@ function AquariumScene({
     return () => onTestFeedReady(() => undefined)
   }, [onTestFeedReady, startFeedingAnimation])
 
+  const startTankSurprise = useCallback((forcedKind?: TankSurpriseKind) => {
+    if (size.width <= 0 || size.height <= 0) return
+    const kind = forcedKind ?? (mood === 'happy' ? 'disco-pearl' : 'old-boot')
+    const now = performance.now()
+    const surprise: TankSurprise = {
+      id: Date.now(),
+      kind,
+      startedAt: now,
+      until: now + 9_500,
+    }
+    tankSurpriseRef.current = surprise
+    setTankSurprise(surprise)
+
+    const isTreasure = kind === 'disco-pearl'
+    setFeedNotice(isTreasure ? 'A disco pearl! The whole tank is celebrating. ✨' : 'Oh no. The mystery chest had an old boot in it.')
+    if (isTreasure) {
+      playFeedChime()
+      playAudioFrom(fishHookHappyAudioSources, 0.42)
+    } else {
+      playAudioFrom(mournAudioSources, 0.38)
+    }
+
+    const surpriseBursts: BubbleBurst[] = Array.from({ length: isTreasure ? 30 : 18 }, (_, index) => ({
+      id: surprise.id * 100 + index,
+      x: randomBetween(size.width * 0.24, size.width * 0.76),
+      y: randomBetween(size.height * 0.36, size.height * 0.82),
+      size: randomBetween(isTreasure ? 10 : 16, isTreasure ? 28 : 46),
+      tone: isTreasure ? 'gold' : 'murk',
+    }))
+    setBursts((current) => [...current, ...surpriseBursts].slice(-44))
+
+    const surpriseHearts: FloatingHeart[] = isTreasure
+      ? Array.from({ length: 12 }, (_, index) => ({
+        id: surprise.id * 1000 + index,
+        x: randomBetween(size.width * 0.16, size.width * 0.84),
+        y: randomBetween(size.height * 0.25, size.height * 0.72),
+        size: randomBetween(17, 31),
+        delayMs: index * 120,
+      }))
+      : []
+    if (surpriseHearts.length > 0) {
+      setHearts((current) => [...current, ...surpriseHearts].slice(-24))
+    }
+
+    for (const swimmer of swimmersRef.current.values()) {
+      swimmer.pauseUntil = 0
+      if (isTreasure) {
+        swimmer.moodBoostUntil = now + 9_200
+        swimmer.speed = randomBetween(0.09, 0.16)
+      }
+    }
+
+    const clearTimeoutId = window.setTimeout(() => {
+      if (tankSurpriseRef.current?.id === surprise.id) {
+        tankSurpriseRef.current = null
+        setTankSurprise(null)
+        setFeedNotice('')
+      }
+      setBursts((current) => current.filter((burst) => !surpriseBursts.some((item) => item.id === burst.id)))
+      if (surpriseHearts.length > 0) {
+        setHearts((current) => current.filter((heart) => !surpriseHearts.some((item) => item.id === heart.id)))
+      }
+      bubbleTimeoutsRef.current.delete(clearTimeoutId)
+    }, 9_500)
+    bubbleTimeoutsRef.current.add(clearTimeoutId)
+  }, [mood, size.height, size.width])
+
+  useEffect(() => {
+    onTestSurpriseReady(() => startTankSurprise(mood === 'happy' || mood === 'content' ? 'disco-pearl' : 'old-boot'))
+    return () => onTestSurpriseReady(() => undefined)
+  }, [mood, onTestSurpriseReady, startTankSurprise])
+
+  useEffect(() => {
+    if (mood !== 'happy' && mood !== 'very_hungry' && mood !== 'sad') return undefined
+
+    let timeoutId = 0
+    let firstEvent = true
+    const schedule = () => {
+      const delay = firstEvent
+        ? (mood === 'happy' ? randomBetween(25_000, 50_000) : randomBetween(35_000, 70_000))
+        : (mood === 'happy' ? randomBetween(3, 5) : randomBetween(2.5, 4.5)) * 60_000
+      firstEvent = false
+      timeoutId = window.setTimeout(() => {
+        if (document.visibilityState === 'visible' && !tankSurpriseRef.current) {
+          startTankSurprise(mood === 'happy' ? 'disco-pearl' : 'old-boot')
+        }
+        schedule()
+      }, delay)
+    }
+    schedule()
+    return () => window.clearTimeout(timeoutId)
+  }, [mood, startTankSurprise])
+
   const startFishHookTest = useCallback(() => {
     manualFishHookRef.current = {
       startedAt: performance.now(),
-      hasWorm: Math.random() < 0.2,
+      hasWorm: mood === 'peckish' ? false : mood === 'happy' || mood === 'content' ? Math.random() < 0.2 : true,
+      canTakeFish: false,
     }
-  }, [])
+  }, [mood])
 
   useEffect(() => {
     onTestHookReady(startFishHookTest)
@@ -861,7 +1167,7 @@ function AquariumScene({
       setFeedNotice('The fish are happy again! 🎉')
       playFeedChime()
       const noticeTimeout = window.setTimeout(() => setFeedNotice(''), 4200)
-      bubbleTimeoutsRef.current.push(noticeTimeout)
+      bubbleTimeoutsRef.current.add(noticeTimeout)
 
       const celebrationHearts = Array.from({ length: 16 }, (_, index) => ({
         id: latestResetEvent.id * 10_000 + index + 50_000,
@@ -874,7 +1180,7 @@ function AquariumScene({
       const heartsTimeout = window.setTimeout(() => {
         setHearts((current) => current.filter((heart) => !celebrationHearts.some((ch) => ch.id === heart.id)))
       }, 4500)
-      bubbleTimeoutsRef.current.push(heartsTimeout)
+      bubbleTimeoutsRef.current.add(heartsTimeout)
 
       for (const swimmer of swimmersRef.current.values()) {
         swimmer.moodBoostUntil = performance.now() + 6000
@@ -886,12 +1192,13 @@ function AquariumScene({
       const timeoutId = window.setTimeout(() => {
         setBursts((current) => current.filter((burst) => !newBursts.some((newBurst) => newBurst.id === burst.id)))
       }, 2600)
-      bubbleTimeoutsRef.current.push(timeoutId)
+      bubbleTimeoutsRef.current.add(timeoutId)
     }
   }, [events, size.height, size.width, startFeedingAnimation])
 
   useEffect(() => {
     if (size.width <= 0 || size.height <= 0) return undefined
+    const moodBehavior = getTankMoodBehavior(mood)
 
     const activeIds = new Set(creatures.map((creature) => creature.id))
     for (const id of swimmersRef.current.keys()) {
@@ -910,7 +1217,7 @@ function AquariumScene({
         y: start.y,
         targetX: target.x,
         targetY: target.y,
-        speed: randomBetween(0.018, 0.042),
+        speed: getCreatureCruiseSpeed(creature.species_id),
         facing: target.x >= start.x ? 1 : -1,
         pauseUntil: 0,
         moodBoostUntil: 0,
@@ -930,22 +1237,94 @@ function AquariumScene({
       const phonePosition = fishTextActive
         ? getPhoneTextPosition(size.width, size.height, phoneSize, phoneUntilMs, time)
         : null
-      if (manualFishHookRef.current && time - manualFishHookRef.current.startedAt >= fishHookLowerMs + fishHookHoldMs + fishHookRetractMs) {
+      if (manualFishHookRef.current && time - manualFishHookRef.current.startedAt >= fishHookActiveMs) {
         manualFishHookRef.current = null
       }
-      const hookPosition = getFishHookPosition(size.width, size.height, time, manualFishHookRef.current)
+      const wallClockTime = Date.now()
+      automaticFishHookRef.current = getAutomaticFishHookCycle(wallClockTime, mood, automaticFishHookRef.current)
+      const hookPosition = getFishHookPosition(
+        size.width,
+        size.height,
+        time,
+        wallClockTime,
+        automaticFishHookRef.current,
+        manualFishHookRef.current,
+      )
       const hook = hookRef.current
       const feedingFrenzy = feedingFrenzyRef.current && time < feedingFrenzyRef.current.until ? feedingFrenzyRef.current : null
+      const activeSurprise = tankSurpriseRef.current && time < tankSurpriseRef.current.until ? tankSurpriseRef.current : null
       if (feedingFrenzyRef.current && time >= feedingFrenzyRef.current.until) {
         feedingFrenzyRef.current = null
       }
+      let rememberedTankInteraction = tankInteractionRef.current
+      if (rememberedTankInteraction && time >= rememberedTankInteraction.memoryUntil) {
+        tankInteractionRef.current = null
+        rememberedTankInteraction = null
+      }
+      const tankInteraction = rememberedTankInteraction && time < rememberedTankInteraction.activeUntil
+        ? rememberedTankInteraction
+        : null
+      if (!tankInteraction && tankInteractionWasActiveRef.current) {
+        for (const creature of creatures) {
+          const swimmer = swimmersRef.current.get(creature.id)
+          if (!swimmer || creature.species_id === 'clam') continue
+          const next = pickCreatureTarget(creature, size.width, size.height, getCreatureSize(creature, size.width))
+          swimmer.targetX = next.x
+          swimmer.targetY = next.y
+          swimmer.speed = getCreatureCruiseSpeed(creature.species_id)
+          swimmer.pauseUntil = 0
+        }
+      }
+      tankInteractionWasActiveRef.current = tankInteraction !== null
+
+      const automaticHookCycle = automaticFishHookRef.current
+      if (
+        hookPosition.takeReady
+        && automaticHookCycle
+        && !hookTakeRequestedCyclesRef.current.has(automaticHookCycle.cycleKey)
+      ) {
+        const requestedCycle = automaticHookCycle
+        hookTakeRequestedCyclesRef.current.add(requestedCycle.cycleKey)
+        if (hookTakeRequestedCyclesRef.current.size > 48) {
+          hookTakeRequestedCyclesRef.current = new Set([requestedCycle.cycleKey])
+        }
+        void onHookTakeRef.current(requestedCycle.cycleKey)
+          .then((capture) => {
+            if (!capture) return
+            if (!sceneMountedRef.current) {
+              onHookCaptureFinishedRef.current(capture)
+              return
+            }
+            const cycleIsStillVisible = automaticFishHookRef.current?.cycleKey === requestedCycle.cycleKey
+              && Date.now() % requestedCycle.cycleMs < fishHookActiveMs
+            if (!cycleIsStillVisible) {
+              onHookCaptureFinishedRef.current(capture)
+              return
+            }
+            hookCaptureRef.current = capture
+            setFeedNotice(capture.message)
+            playAudioFrom(mournAudioSources, 0.46)
+          })
+          .catch(() => {
+            // A surprise event should never interrupt the shared aquarium.
+          })
+      }
+
+      if (!hookPosition.visible && hookCaptureRef.current) {
+        const capture = hookCaptureRef.current
+        hookCaptureRef.current = null
+        onHookCaptureFinishedRef.current(capture)
+        const noticeTimeout = window.setTimeout(() => setFeedNotice(''), 4_200)
+        bubbleTimeoutsRef.current.add(noticeTimeout)
+      }
+
       if (hookPosition.visible && hookPosition.hasWorm) {
-        if (!hookHappySoundPlayedRef.current) {
-          playAudioFrom(fishHookHappyAudioSources, 0.42)
-          hookHappySoundPlayedRef.current = true
+        if (!hookSoundPlayedRef.current) {
+          playAudioFrom(hookPosition.canTakeFish ? mournAudioSources : hungryFishAudioSources, hookPosition.canTakeFish ? 0.32 : 0.2)
+          hookSoundPlayedRef.current = true
         }
       } else {
-        hookHappySoundPlayedRef.current = false
+        hookSoundPlayedRef.current = false
       }
 
       if (phone && phonePosition) {
@@ -965,11 +1344,15 @@ function AquariumScene({
       if (hook && hookPosition.visible) {
         hook.classList.add('lowered')
         hook.classList.toggle('baited', hookPosition.hasWorm)
+        hook.classList.toggle('dangerous', hookPosition.canTakeFish)
+        hook.classList.toggle('catching', hookCaptureRef.current !== null)
         hook.style.height = `${Math.max(0, hookPosition.y)}px`
         hook.style.transform = `translate3d(${hookPosition.x - 22}px, 0, 0)`
       } else if (hook) {
         hook.classList.remove('lowered')
         hook.classList.remove('baited')
+        hook.classList.remove('dangerous')
+        hook.classList.remove('catching')
         hook.style.removeProperty('height')
         hook.style.removeProperty('transform')
       }
@@ -994,7 +1377,53 @@ function AquariumScene({
 
         const spriteSize = getCreatureSize(creature, size.width)
         const canJoinFeeding = creature.species_id !== 'crab'
-        if (feedingFrenzy && canJoinFeeding) {
+        const isHookCaught = hookCaptureRef.current?.creature.id === creature.id && hookPosition.visible
+        sprite.classList.toggle('hook-caught', isHookCaught)
+
+        if (isHookCaught) {
+          swimmer.targetX = hookPosition.x + 4
+          swimmer.targetY = Math.min(size.height - spriteSize * 0.62, hookPosition.y + spriteSize * 0.32)
+          swimmer.pauseUntil = 0
+          const dx = swimmer.targetX - swimmer.x
+          const dy = swimmer.targetY - swimmer.y
+          const distance = Math.hypot(dx, dy)
+          if (distance > 1) {
+            const step = Math.min(distance, Math.max(0.2, swimmer.speed * 6) * delta)
+            swimmer.x += (dx / distance) * step
+            swimmer.y += (dy / distance) * step
+            swimmer.facing = dx >= 0 ? 1 : -1
+          }
+          swimmer.moodBoostUntil = time + 220
+        } else if (tankInteraction) {
+          const reactionTarget = getTankReactionTarget(
+            tankInteraction,
+            swimmer,
+            index,
+            creatures.length,
+            spriteSize,
+            size.width,
+            size.height,
+            time,
+            creature.species_id === 'crab',
+          )
+          swimmer.targetX = reactionTarget.x
+          swimmer.targetY = reactionTarget.y
+          swimmer.pauseUntil = 0
+
+          const dx = swimmer.targetX - swimmer.x
+          const dy = swimmer.targetY - swimmer.y
+          const distance = Math.hypot(dx, dy)
+          if (distance > 1) {
+            const step = Math.min(
+              distance,
+              getTankReactionSpeed(tankInteraction.mode, swimmer.speed, moodBehavior.reactionSpeedMultiplier) * delta,
+            )
+            swimmer.x += (dx / distance) * step
+            swimmer.y += (dy / distance) * step
+            swimmer.facing = dx >= 0 ? 1 : -1
+          }
+          swimmer.moodBoostUntil = time + 220
+        } else if (feedingFrenzy && canJoinFeeding) {
           const feedingTarget = getFeedingFrenzyTarget(feedingFrenzy, index, creatures.length, spriteSize, size.width, size.height, time)
           swimmer.targetX = feedingTarget.x
           swimmer.targetY = feedingTarget.y
@@ -1004,12 +1433,42 @@ function AquariumScene({
           const dy = swimmer.targetY - swimmer.y
           const distance = Math.hypot(dx, dy)
           if (distance > 1) {
-            const step = Math.min(distance, Math.max(0.72, swimmer.speed * 7.4) * delta)
+            const step = Math.min(
+              distance,
+              Math.max(0.72, swimmer.speed * 7.4) * moodBehavior.reactionSpeedMultiplier * delta,
+            )
             swimmer.x += (dx / distance) * step
             swimmer.y += (dy / distance) * step
             swimmer.facing = dx >= 0 ? 1 : -1
           }
           swimmer.moodBoostUntil = time + 280
+        } else if (activeSurprise && canJoinFeeding) {
+          const surpriseTarget = getTankSurpriseTarget(
+            activeSurprise,
+            index,
+            creatures.length,
+            spriteSize,
+            size.width,
+            size.height,
+            time,
+          )
+          swimmer.targetX = surpriseTarget.x
+          swimmer.targetY = surpriseTarget.y
+          swimmer.pauseUntil = 0
+
+          const dx = swimmer.targetX - swimmer.x
+          const dy = swimmer.targetY - swimmer.y
+          const distance = Math.hypot(dx, dy)
+          if (distance > 1) {
+            const eventMultiplier = activeSurprise.kind === 'disco-pearl'
+              ? Math.max(1.15, moodBehavior.reactionSpeedMultiplier)
+              : moodBehavior.reactionSpeedMultiplier * 0.58
+            const step = Math.min(distance, Math.max(0.12, swimmer.speed * 5.4) * eventMultiplier * delta)
+            swimmer.x += (dx / distance) * step
+            swimmer.y += (dy / distance) * step
+            swimmer.facing = dx >= 0 ? 1 : -1
+          }
+          if (activeSurprise.kind === 'disco-pearl') swimmer.moodBoostUntil = time + 260
         } else if (phonePosition) {
           const huddle = getPhoneHuddleTarget(phonePosition, index, creatures.length, spriteSize, phoneSize, time)
           swimmer.targetX = Math.min(Math.max(huddle.x, spriteSize * 0.55), size.width - spriteSize * 0.55)
@@ -1020,7 +1479,10 @@ function AquariumScene({
           const dy = swimmer.targetY - swimmer.y
           const distance = Math.hypot(dx, dy)
           if (distance > 1) {
-            const step = Math.min(distance, Math.max(0.088, swimmer.speed * 3.1) * delta)
+            const step = Math.min(
+              distance,
+              Math.max(0.088, swimmer.speed * 3.1) * moodBehavior.reactionSpeedMultiplier * delta,
+            )
             swimmer.x += (dx / distance) * step
             swimmer.y += (dy / distance) * step
             swimmer.facing = dx >= 0 ? 1 : -1
@@ -1036,7 +1498,13 @@ function AquariumScene({
           const dy = swimmer.targetY - swimmer.y
           const distance = Math.hypot(dx, dy)
           if (distance > 1) {
-            const step = Math.min(distance, Math.max(0.062, swimmer.speed * 2.35) * delta * hookPosition.attraction)
+            const step = Math.min(
+              distance,
+              Math.max(0.062, swimmer.speed * 2.35)
+                * moodBehavior.reactionSpeedMultiplier
+                * delta
+                * hookPosition.attraction,
+            )
             swimmer.x += (dx / distance) * step
             swimmer.y += (dy / distance) * step
             swimmer.facing = dx >= 0 ? 1 : -1
@@ -1052,18 +1520,18 @@ function AquariumScene({
             swimmer.targetX = next.x
             swimmer.targetY = next.y
             swimmer.facing = next.x >= swimmer.x ? 1 : -1
-            swimmer.speed = randomBetween(0.018, 0.042)
+            swimmer.speed = getCreatureCruiseSpeed(creature.species_id)
             if (creature.species_id === 'crab') {
               // Crabs settle in and hang out, lingering much longer when
               // they've reached one of the algae clusters at the edges.
               const nearAlgae = swimmer.x < size.width * 0.2 || swimmer.x > size.width * 0.8
               swimmer.pauseUntil = time + (nearAlgae ? randomBetween(3200, 6000) : randomBetween(900, 2000))
             } else {
-              swimmer.pauseUntil = time + randomBetween(mood === 'sad' ? 520 : 120, mood === 'happy' ? 700 : 1500)
+              swimmer.pauseUntil = time + randomBetween(moodBehavior.pauseMinMs, moodBehavior.pauseMaxMs)
             }
           } else {
             const boost = time < swimmer.moodBoostUntil ? 1.8 : 1
-            const step = swimmer.speed * moodSpeed[mood] * boost * delta
+            const step = swimmer.speed * moodBehavior.cruiseSpeedMultiplier * boost * delta
             swimmer.x += (dx / distance) * step
             swimmer.y += (dy / distance) * step
             if (creature.species_id === 'seahorse') {
@@ -1075,13 +1543,33 @@ function AquariumScene({
 
         sprite.style.width = `${spriteSize}px`
         sprite.style.height = `${spriteSize}px`
-        const floatY = creature.species_id === 'seahorse' ? Math.sin(time / 900 + swimmer.bobOffset) * 8 : 0
-        const feedingTilt = feedingFrenzy && canJoinFeeding ? -45 + Math.sin(time / 90 + swimmer.bobOffset) * 8 : 0
-        const wiggle = time < swimmer.moodBoostUntil ? Math.sin(time / (feedingFrenzy ? 58 : 140) + swimmer.bobOffset) * (feedingFrenzy ? 10 : 5) : 0
-        const droop = mood === 'sad' ? 9 : mood === 'very_hungry' ? 4 : 0
+        const isJellyfish = creature.species_id === 'happy-jellyfish'
+        const floatY = isJellyfish
+          ? Math.sin(time / 720 + swimmer.bobOffset) * 10
+          : creature.species_id === 'seahorse'
+            ? Math.sin(time / 900 + swimmer.bobOffset) * 8
+            : 0
+        const feedingTilt = !tankInteraction && feedingFrenzy && canJoinFeeding && !isJellyfish
+          ? -45 + Math.sin(time / 90 + swimmer.bobOffset) * 8
+          : 0
+        const reactionIsFast = tankInteraction?.mode === 'engaged' || Boolean(feedingFrenzy)
+        const reactionWiggle = tankInteraction?.mode === 'engaged'
+          ? 10
+          : tankInteraction?.mode === 'startled'
+            ? 5
+            : tankInteraction?.mode === 'wary'
+              ? 3
+              : 5.5
+        const wiggle = time < swimmer.moodBoostUntil
+          ? Math.sin(time / (reactionIsFast ? 58 : 140) + swimmer.bobOffset)
+            * (isJellyfish ? 2.5 : feedingFrenzy ? 10 : reactionWiggle)
+            * Math.max(0.35, moodBehavior.reactionSpeedMultiplier)
+          : 0
+        const droop = mood === 'sad' ? (isJellyfish ? 3 : 9) : mood === 'very_hungry' ? (isJellyfish ? 2 : 4) : 0
         sprite.style.transform = `translate3d(${swimmer.x - spriteSize / 2}px, ${swimmer.y - spriteSize / 2 + floatY}px, 0)`
         if (creatureArt) {
-          creatureArt.style.transform = `scaleX(${swimmer.facing}) rotate(${feedingTilt + wiggle + droop}deg)`
+          const facing = isJellyfish ? 1 : swimmer.facing
+          creatureArt.style.transform = `scaleX(${facing}) rotate(${feedingTilt + wiggle + droop}deg)`
         }
       }
 
@@ -1099,6 +1587,7 @@ function AquariumScene({
 
   useEffect(() => {
     if (size.width <= 0) return undefined
+    const behavior = getTankMoodBehavior(mood)
 
     const bubbleInterval = window.setInterval(() => {
       const bubble: AmbientBubble = {
@@ -1110,18 +1599,20 @@ function AquariumScene({
       setAmbientBubbles((current) => [...current, bubble].slice(-18))
       const timeoutId = window.setTimeout(() => {
         setAmbientBubbles((current) => current.filter((item) => item.id !== bubble.id))
+        bubbleTimeoutsRef.current.delete(timeoutId)
       }, bubble.durationMs)
-      bubbleTimeoutsRef.current.push(timeoutId)
-    }, 1800)
+      bubbleTimeoutsRef.current.add(timeoutId)
+    }, behavior.bubbleIntervalMs)
 
     return () => window.clearInterval(bubbleInterval)
-  }, [size.width])
+  }, [mood, size.width])
 
   useEffect(
     () => () => {
       for (const timeoutId of bubbleTimeoutsRef.current) {
         window.clearTimeout(timeoutId)
       }
+      bubbleTimeoutsRef.current.clear()
     },
     [],
   )
@@ -1132,8 +1623,53 @@ function AquariumScene({
   )
 
   return (
-    <div ref={tankRef} className="aquarium-tank" aria-label={`Aquarium with ${creatureSummary}`}>
+    <div
+      ref={tankRef}
+      className="aquarium-tank"
+      role="group"
+      tabIndex={0}
+      aria-label={`Interactive aquarium with ${creatureSummary}. Tap the water repeatedly to gain the fish's curiosity and draw them closer.${immersive ? ' Tap the top edge or swipe up from the bottom to exit.' : ''}`}
+      onPointerDown={handleTankPointerDown}
+      onPointerUp={handleTankPointerUp}
+      onPointerCancel={handleTankPointerCancel}
+      onKeyDown={handleTankKeyDown}
+    >
       <div className="aquarium-light" />
+      {mood === 'happy' && (
+        <div className="aquarium-sparkle-field" aria-hidden="true">
+          {sparkleField.map((sparkle) => (
+            <span
+              key={sparkle.id}
+              style={
+                {
+                  '--sparkle-x': `${sparkle.x}%`,
+                  '--sparkle-y': `${sparkle.y}%`,
+                  '--sparkle-size': `${sparkle.size}px`,
+                  '--sparkle-delay': `${sparkle.delayMs}ms`,
+                  '--sparkle-duration': `${sparkle.durationMs}ms`,
+                } as CSSProperties
+              }
+            >✦</span>
+          ))}
+        </div>
+      )}
+      {(mood === 'very_hungry' || mood === 'sad') && (
+        <div className="aquarium-murk-field" aria-hidden="true">
+          {murkField.map((mote) => (
+            <span
+              key={mote.id}
+              style={
+                {
+                  '--murk-x': `${mote.x}%`,
+                  '--murk-y': `${mote.y}%`,
+                  '--murk-size': `${mote.size}px`,
+                  '--murk-delay': `${mote.delayMs}ms`,
+                } as CSSProperties
+              }
+            />
+          ))}
+        </div>
+      )}
       <div className="aquarium-sand" />
       <div className="aquarium-rock rock-one" />
       <div className="aquarium-rock rock-two" />
@@ -1162,6 +1698,39 @@ function AquariumScene({
           </g>
         </svg>
       </div>
+
+      {tankSurprise && (
+        <div
+          className={`aquarium-tank-surprise aquarium-tank-surprise-${tankSurprise.kind}`}
+          role="img"
+          aria-label={tankSurprise.kind === 'disco-pearl' ? 'A mystery chest revealing a sparkling disco pearl' : 'A mystery chest revealing an old boot and murky water'}
+        >
+          <svg viewBox="0 0 180 180" aria-hidden="true">
+            <ellipse className="surprise-shadow" cx="90" cy="153" rx="63" ry="13" />
+            <g className="surprise-chest">
+              <path className="surprise-chest-lid" d="M38 88 C42 54 62 39 90 39 C118 39 138 54 142 88 Z" />
+              <path className="surprise-chest-band" d="M86 40 H96 V88 H86 Z" />
+              <path className="surprise-chest-body" d="M34 86 H146 L137 151 H43 Z" />
+              <path className="surprise-chest-rim" d="M31 83 H149 V99 H31 Z" />
+              <rect className="surprise-chest-lock" x="79" y="91" width="23" height="27" rx="5" />
+            </g>
+            {tankSurprise.kind === 'disco-pearl' ? (
+              <g className="surprise-disco-pearl">
+                <path className="surprise-ray" d="M90 51 V9 M63 58 L43 20 M117 58 L138 20 M51 77 L14 61 M129 77 L167 61" />
+                <circle className="surprise-pearl-glow" cx="90" cy="64" r="31" />
+                <circle className="surprise-pearl" cx="90" cy="64" r="21" />
+                <path className="surprise-pearl-grid" d="M69 61 H111 M72 50 H108 M74 74 H106 M83 44 V84 M97 44 V84" />
+              </g>
+            ) : (
+              <g className="surprise-old-boot">
+                <path d="M76 30 H111 L106 72 C116 76 130 85 141 99 C145 105 140 115 131 116 H69 C57 116 51 106 58 98 L78 78 Z" />
+                <path className="boot-patch" d="M87 43 H103 L100 62 H84 Z" />
+                <path className="boot-lace" d="M80 68 L104 77 M76 77 L112 89" />
+              </g>
+            )}
+          </svg>
+        </div>
+      )}
 
       {feedNotice && <div className="aquarium-feed-notice">{feedNotice}</div>}
 
@@ -1234,7 +1803,7 @@ function AquariumScene({
       {bursts.map((burst) => (
         <span
           key={burst.id}
-          className="aquarium-burst-bubble"
+          className={`aquarium-burst-bubble${burst.tone ? ` aquarium-burst-${burst.tone}` : ''}`}
           style={
             {
               left: burst.x,
@@ -1301,6 +1870,15 @@ function pickCreatureTarget(creature: AquariumCreature, width: number, height: n
     return { ...target, y: Math.max(spriteSize, target.y - randomBetween(18, 70)) }
   }
 
+  if (creature.species_id === 'happy-jellyfish') {
+    const minY = spriteSize * 0.92
+    const maxY = Math.max(minY, height * 0.68)
+    return {
+      x: randomBetween(spriteSize * 0.7, Math.max(spriteSize * 0.7, width - spriteSize * 0.7)),
+      y: randomBetween(minY, maxY),
+    }
+  }
+
   return pickTarget(width, height, spriteSize)
 }
 
@@ -1346,36 +1924,6 @@ function getPhoneHuddleTarget(
   }
 }
 
-function smoothStep(value: number) {
-  return value * value * (3 - 2 * value)
-}
-
-function getFishHookPosition(width: number, height: number, time: number, manualDrop: ManualFishHookDrop | null = null): FishHookPosition {
-  const phase = manualDrop ? time - manualDrop.startedAt : Date.now() % fishHookCycleMs
-  const activeMs = fishHookLowerMs + fishHookHoldMs + fishHookRetractMs
-  if (phase >= activeMs) {
-    return { visible: false, x: 0, y: 0, attraction: 0, hasWorm: false }
-  }
-
-  const targetY = height * 0.6
-  const x = width * 0.58 + Math.sin(time / 2600) * Math.min(34, width * 0.04)
-  let progress = 1
-
-  if (phase < fishHookLowerMs) {
-    progress = smoothStep(phase / fishHookLowerMs)
-  } else if (phase > fishHookLowerMs + fishHookHoldMs) {
-    progress = 1 - smoothStep((phase - fishHookLowerMs - fishHookHoldMs) / fishHookRetractMs)
-  }
-
-  return {
-    visible: true,
-    x,
-    y: targetY * progress,
-    attraction: manualDrop?.hasWorm ? Math.min(1, progress * 1.35) : 0,
-    hasWorm: manualDrop?.hasWorm ?? false,
-  }
-}
-
 function getFishHookCuriousTarget(
   hookPosition: { x: number; y: number },
   index: number,
@@ -1389,6 +1937,39 @@ function getFishHookCuriousTarget(
   return {
     x: hookPosition.x + Math.cos(angle) * radius + Math.sin(time / 810 + index) * 8,
     y: hookPosition.y + spriteSize * 0.42 + Math.sin(angle) * radius * 0.48 + Math.cos(time / 920 + index) * 7,
+  }
+}
+
+function getTankSurpriseTarget(
+  surprise: TankSurprise,
+  index: number,
+  creatureCount: number,
+  spriteSize: number,
+  width: number,
+  height: number,
+  time: number,
+) {
+  const centerX = width * 0.5
+  const centerY = height * 0.7
+  const elapsed = time - surprise.startedAt
+  const minX = spriteSize * 0.58
+  const maxX = Math.max(minX, width - spriteSize * 0.58)
+  const minY = spriteSize * 0.62
+  const maxY = Math.max(minY, height - spriteSize * 1.1)
+
+  if (surprise.kind === 'disco-pearl') {
+    const angle = elapsed / 260 + index * ((Math.PI * 2) / Math.max(1, creatureCount))
+    const radius = Math.min(width * 0.24, 115) + (index % 3) * 16
+    return {
+      x: Math.min(Math.max(centerX + Math.cos(angle) * radius, minX), maxX),
+      y: Math.min(Math.max(centerY - 28 + Math.sin(angle) * radius * 0.46, minY), maxY),
+    }
+  }
+
+  const retreatSide = index % 2 === 0 ? -1 : 1
+  return {
+    x: Math.min(Math.max(centerX + retreatSide * width * 0.42, minX), maxX),
+    y: Math.min(Math.max(height * (0.28 + (index % 4) * 0.12), minY), maxY),
   }
 }
 
@@ -1417,16 +1998,6 @@ function getFeedingFrenzyTarget(
   }
 }
 
-export function CreatureArt({ speciesId, mood }: { speciesId: string; mood: AquariumMood }) {
-  if (speciesId === 'angelfish') return <Angelfish mood={mood} />
-  if (speciesId === 'seahorse') return <Seahorse mood={mood} />
-  if (speciesId === 'crab') return <Crab mood={mood} />
-  if (speciesId === 'pufferfish') return <Pufferfish mood={mood} />
-  if (speciesId === 'starfish') return <Starfish mood={mood} />
-  if (speciesId === 'clam') return <Clam mood={mood} />
-  return <Clownfish mood={mood} />
-}
-
 function AquariumPhoneBubble({ nodeRef }: { nodeRef: (node: HTMLDivElement | null) => void }) {
   return (
     <div ref={nodeRef} className="aquarium-phone-bubble" role="img" aria-label="A phone floating in a bubble">
@@ -1441,96 +2012,6 @@ function AquariumPhoneBubble({ nodeRef }: { nodeRef: (node: HTMLDivElement | nul
         <circle className="phone-home" cx="52" cy="80" r="2.5" />
       </svg>
     </div>
-  )
-}
-
-function Face({ mood, x = 64, y = 50 }: { mood: AquariumMood; x?: number; y?: number }) {
-  const mouth =
-    mood === 'happy' || mood === 'content'
-      ? `M ${x - 9} ${y + 13} Q ${x} ${y + 22} ${x + 9} ${y + 13}`
-      : mood === 'sad' || mood === 'very_hungry'
-        ? `M ${x - 9} ${y + 20} Q ${x} ${y + 10} ${x + 9} ${y + 20}`
-        : `M ${x - 8} ${y + 16} L ${x + 8} ${y + 16}`
-  const crying = mood === 'sad' || mood === 'very_hungry'
-
-  return (
-    <>
-      <g className="creature-eyes">
-        <circle cx={x - 16} cy={y} r="4.5" fill="#24313f" />
-        <circle cx={x + 16} cy={y} r="4.5" fill="#24313f" />
-      </g>
-      {crying && (
-        <g className="creature-tears">
-          <ellipse cx={x - 16} cy={y + 9} rx="2.6" ry="4" fill="#7dd3fc" />
-          <ellipse cx={x + 16} cy={y + 9} rx="2.6" ry="4" fill="#7dd3fc" />
-        </g>
-      )}
-      <path d={mouth} fill="none" stroke="#24313f" strokeLinecap="round" strokeWidth="4" />
-    </>
-  )
-}
-
-function Clownfish({ mood }: { mood: AquariumMood }) {
-  return (
-    <svg viewBox="0 0 128 96" role="img" aria-hidden="true">
-      <path d="M12 48 L35 25 L35 71 Z" fill="#f97316" stroke="#0f4d5c" strokeWidth="4" />
-      <ellipse cx="68" cy="48" rx="45" ry="30" fill="#fb923c" stroke="#0f4d5c" strokeWidth="4" />
-      <path d="M51 22 C43 36 43 60 51 76" fill="none" stroke="#fff7ed" strokeWidth="11" />
-      <path d="M84 21 C76 35 76 61 84 77" fill="none" stroke="#fff7ed" strokeWidth="11" />
-      <path d="M67 18 C58 8 46 12 43 26" fill="#fdba74" stroke="#0f4d5c" strokeWidth="4" />
-      <path d="M68 78 C57 91 46 87 43 72" fill="#fdba74" stroke="#0f4d5c" strokeWidth="4" />
-      <Face mood={mood} x={86} y={43} />
-    </svg>
-  )
-}
-
-function Angelfish({ mood }: { mood: AquariumMood }) {
-  return (
-    <svg viewBox="0 0 128 112" role="img" aria-hidden="true">
-      <path d="M19 56 L41 37 L41 75 Z" fill="#7dd3fc" stroke="#164e63" strokeWidth="4" />
-      <path d="M53 18 C99 20 116 56 73 97 C48 86 38 58 53 18 Z" fill="#fef08a" stroke="#164e63" strokeWidth="4" />
-      <path d="M63 20 C54 45 55 70 67 93" fill="none" stroke="#38bdf8" strokeWidth="7" />
-      <path d="M78 27 C70 47 71 65 82 83" fill="none" stroke="#fb7185" strokeWidth="6" />
-      <Face mood={mood} x={88} y={52} />
-    </svg>
-  )
-}
-
-function Seahorse({ mood }: { mood: AquariumMood }) {
-  // Flat, golden, left-facing seahorse: serrated dorsal ridge, coronet, curled tail.
-  const isSad = mood === 'sad' || mood === 'very_hungry'
-  return (
-    <svg viewBox="0 0 128 128" role="img" aria-hidden="true">
-      {/* serrated back ridge */}
-      <path d="M74.3 43.6 L82.3 41.9 L77.5 49.8 Z" fill="#f3a838" />
-      <path d="M77.9 50.9 L85.6 52.4 L78.9 57.9 Z" fill="#f3a838" />
-      <path d="M78.9 59.1 L85.4 63.5 L78.0 66.1 Z" fill="#f3a838" />
-      <path d="M77.8 67.3 L82.8 74.0 L76.6 74.2 Z" fill="#f3a838" />
-      <path d="M76.3 75.5 L79.5 83.3 L74.5 82.2 Z" fill="#f3a838" />
-      <path d="M74.1 83.4 L75.3 91.5 L71.2 89.8 Z" fill="#f3a838" />
-      <path d="M70.6 90.9 L70.0 98.5 L66.4 96.5 Z" fill="#f3a838" />
-      {/* coronet */}
-      <path d="M50.5 32 L55 25 L59.5 32 Z" fill="#f3a838" />
-      <path d="M56.5 30 L61 21.5 L65.5 30 Z" fill="#f3a838" />
-      <path d="M62.5 32 L67 25 L71.5 32 Z" fill="#f3a838" />
-      {/* curled tail (forward curl) */}
-      <path d="M68.9 95.2 L69.2 97.4 L69.4 99.6 L69.2 101.7 L68.8 103.8 L68.2 105.8 L67.3 107.7 L66.2 109.5 L64.9 111.1 L63.5 112.6 L61.9 113.8 L60.3 114.8 L58.5 115.7 L56.6 116.3 L54.8 116.6 L52.9 116.8 L51.0 116.7 L49.2 116.4 L47.4 115.9 L45.8 115.2 L44.2 114.3 L42.8 113.2 L41.6 112.0 L40.5 110.7 L39.6 109.3 L38.9 107.8 L38.3 106.3 L38.0 104.7 L37.8 103.1 L37.9 101.5 L38.1 100.0 L38.5 98.5 L39.1 97.1 L39.8 95.8 L40.6 94.6 L41.6 93.6 L42.7 92.7 L43.8 91.9 L45.0 91.3 L46.3 90.8 L47.6 90.5 L48.9 90.4 L50.2 90.4 L51.4 90.6 L52.6 90.9 L53.7 91.4 L54.8 91.9 L55.7 92.6 L56.5 93.4 L57.3 94.2 L57.9 95.1 L58.4 96.1 L58.7 97.1 L58.9 98.1 L59.0 99.1 L59.0 100.1 L58.9 101.0 L58.6 101.9 L58.3 102.7 L57.8 103.5 L57.3 104.2 L56.7 104.8 L56.1 105.4 L55.4 105.8 L54.7 106.1 L51.9 102.2 L52.1 102.2 L52.3 102.1 L52.6 102.0 L52.8 101.9 L53.0 101.7 L53.2 101.5 L53.3 101.3 L53.5 101.0 L53.6 100.7 L53.6 100.4 L53.7 100.0 L53.6 99.7 L53.6 99.3 L53.4 98.9 L53.3 98.6 L53.0 98.2 L52.7 97.9 L52.4 97.6 L52.0 97.3 L51.6 97.1 L51.2 97.0 L50.7 96.9 L50.2 96.8 L49.6 96.8 L49.1 96.9 L48.6 97.0 L48.1 97.3 L47.5 97.5 L47.1 97.9 L46.6 98.3 L46.2 98.8 L45.9 99.3 L45.6 99.9 L45.4 100.6 L45.3 101.2 L45.2 101.9 L45.3 102.6 L45.4 103.3 L45.6 104.0 L45.9 104.7 L46.3 105.4 L46.7 106.0 L47.3 106.6 L47.9 107.1 L48.6 107.5 L49.4 107.8 L50.2 108.1 L51.0 108.3 L51.9 108.3 L52.8 108.3 L53.6 108.2 L54.5 107.9 L55.4 107.6 L56.2 107.1 L57.0 106.5 L57.7 105.8 L58.3 105.1 L58.8 104.2 L59.3 103.3 L59.6 102.4 L59.8 101.3 L59.9 100.3 L59.9 99.2 L59.7 98.2 Z" fill="#f3a838" />
-      {/* body + head + snout */}
-      <path d="M31 49 C37 45 43 43 49 42 C54 35 58 27 65 27 C72 28 75 34 74 43 C79 50 80 57 78 66 C76 80 73 90 66 97 C62 102 57 101 56 95 C53 85 49 77 46 68 C45 63 45 59 45 56 C44 55 39 55 34 55 C32 55 31 54 31 53 C28 53 28 49 31 49 Z" fill="#f3a838" />
-      {/* lighter belly panel */}
-      <path d="M45 57 C48 57 50 61 51 67 C52 76 54 83 57 89 C55 89 53 86 51 81 C47 73 45 64 45 60 C44 58 44 57 45 57 Z" fill="#f8ce58" />
-      {/* segment ridges */}
-      <path d="M48 61 C54 61 59 63 62 67" fill="none" stroke="#e89224" strokeWidth="2.3" strokeLinecap="round" opacity="0.5" />
-      <path d="M49 71 C55 71 60 73 63 77" fill="none" stroke="#e89224" strokeWidth="2.3" strokeLinecap="round" opacity="0.5" />
-      <path d="M51 81 C56 81 60 83 62 86" fill="none" stroke="#e89224" strokeWidth="2.3" strokeLinecap="round" opacity="0.5" />
-      {/* eye */}
-      <rect x="58" y="37" width="6" height="6" rx="1" fill="#3c3c3c" />
-      {isSad && (
-        <g className="creature-tears">
-          <ellipse cx="61" cy="48" rx="2.4" ry="3.6" fill="#7dd3fc" />
-        </g>
-      )}
-    </svg>
   )
 }
 
@@ -1650,57 +2131,6 @@ function TallPlant() {
           strokeWidth={l.sw}
         />
       ))}
-    </svg>
-  )
-}
-
-function Crab({ mood }: { mood: AquariumMood }) {
-  return (
-    <svg viewBox="0 0 128 96" role="img" aria-hidden="true">
-      <ellipse cx="64" cy="56" rx="36" ry="24" fill="#fb7185" stroke="#7f1d1d" strokeWidth="4" />
-      <path d="M28 46 L11 28 M100 46 L117 28" stroke="#7f1d1d" strokeLinecap="round" strokeWidth="7" />
-      <circle cx="10" cy="25" r="10" fill="#fda4af" stroke="#7f1d1d" strokeWidth="4" />
-      <circle cx="118" cy="25" r="10" fill="#fda4af" stroke="#7f1d1d" strokeWidth="4" />
-      <path d="M43 77 L31 91 M55 80 L49 94 M73 80 L79 94 M85 77 L97 91" stroke="#7f1d1d" strokeLinecap="round" strokeWidth="5" />
-      <Face mood={mood} x={64} y={45} />
-    </svg>
-  )
-}
-
-function Pufferfish({ mood }: { mood: AquariumMood }) {
-  return (
-    <svg viewBox="0 0 128 112" role="img" aria-hidden="true">
-      <path d="M14 56 L32 40 L32 72 Z" fill="#fde68a" stroke="#854d0e" strokeWidth="4" />
-      <circle cx="70" cy="56" r="39" fill="#facc15" stroke="#854d0e" strokeWidth="4" />
-      <path d="M49 20 L54 32 M84 18 L80 31 M101 43 L88 46 M100 75 L87 69 M51 91 L56 79" stroke="#854d0e" strokeLinecap="round" strokeWidth="5" />
-      <Face mood={mood} x={78} y={50} />
-    </svg>
-  )
-}
-
-function Starfish({ mood }: { mood: AquariumMood }) {
-  return (
-    <svg viewBox="0 0 128 128" role="img" aria-hidden="true">
-      <path
-        d="M64 14 L78 47 L115 43 L87 67 L98 103 L64 84 L30 103 L41 67 L13 43 L50 47 Z"
-        fill="#f59e0b"
-        stroke="#92400e"
-        strokeLinejoin="round"
-        strokeWidth="5"
-      />
-      <Face mood={mood} x={64} y={60} />
-    </svg>
-  )
-}
-function Clam({ mood }: { mood: AquariumMood }) {
-  return (
-    <svg viewBox="0 0 128 96" role="img" aria-hidden="true">
-      <path d="M16 62 Q64 14 112 62 Z" fill="#fbcfe8" stroke="#9d174d" strokeWidth="4" />
-      <path d="M12 62 Q64 86 116 62 Z" fill="#f9a8d4" stroke="#9d174d" strokeWidth="4" />
-      <path d="M40 60 Q64 30 88 60" fill="none" stroke="#9d174d" strokeWidth="2" opacity="0.5" />
-      <path d="M52 61 Q64 40 76 61" fill="none" stroke="#9d174d" strokeWidth="2" opacity="0.5" />
-      <circle cx="64" cy="60" r="7" fill="#fdf2f8" stroke="#fbcfe8" strokeWidth="2" />
-      <Face mood={mood} x={64} y={58} />
     </svg>
   )
 }

@@ -7,8 +7,8 @@ Definitive reference for the chore → fish mood math. The implementation lives 
 `triggerAquariumEverythingGood`). This doc is written to match that code exactly;
 if they ever disagree, the code wins and this doc has a bug.
 
-Last verified against the code: **2026-07-03** (which also shipped six behavior
-fixes — see [Behavior fixes](#behavior-fixes-2026-07-03)).
+Last verified against the code: **2026-07-13**. The mood-math fixes shipped on
+2026-07-03 are recorded in [Behavior fixes](#behavior-fixes-2026-07-03).
 
 ---
 
@@ -27,6 +27,63 @@ Six moods, ranked from worst to best. Lower rank = sadder fish.
 
 When two moods compete, the engine keeps the **worse** one (`worseAquariumMood`
 picks the lower rank) — except where the mood floor invariant applies (below).
+
+## Mood drives the whole tank
+
+Mood is not just a fish-face swap or a banner. It controls the tank's light,
+water, ambient effects, sounds, swimming energy, hook danger, and mystery event.
+The extremes should feel unmistakable even from across the room.
+
+| Mood | Whole-tank behavior | Automatic hook |
+|---|---|---|
+| `happy` | The water literally sparkles; fish swim fast and joyfully, occasionally make delight sounds, and may discover a positive mystery event. | No hunger hook. |
+| `content` | Calm light, ordinary swimming, and quiet ambient tank behavior. | No hunger hook. |
+| `peckish` | Energy begins to soften, but the fish are still responsive. | Every 15 minutes, always unbaited. |
+| `hungry` | Fish are visibly sluggish and sometimes moan. | Every 10 minutes, with a worm 75% of the time; it cannot capture a fish. |
+| `very_hungry` | Fish are more lethargic, the water looks worse, and distressed sounds become more noticeable. | Every 7 minutes, always with a worm and with a 10% chance to attempt a capture. |
+| `sad` | The panic/misery state: very dark, murky, extremely sluggish, and punctuated by unhappy moans. | Every 5 minutes, always baited, with a 25% chance to attempt a capture. |
+
+Panic mode uses the full `sad` presentation and hook behavior.
+
+### Curious tank taps
+
+Tank taps build familiarity instead of alternating between attraction and
+escape. The first tap causes only a short, proximity-sensitive flinch. The
+second leaves the fish wary but draws them into a cautious standoff. Taps three
+and four make them curious, and continued taps bring them into a tight, lively
+investigation around the touch point. The school remembers recent taps for 18
+seconds and cools gradually, so a brief pause does not reset the interaction.
+
+Mood still controls the energy of the response: happy fish approach and weave
+quickly, while hungry fish show the same growing curiosity with sluggish,
+lethargic movement.
+
+### Hook capture safeguards
+
+The client only reports the current dangerous hook cycle. The server validates
+that cycle and performs the authoritative 10% or 25% capture roll, so a caller
+cannot manufacture extra attempts and refreshes or multiple displays cannot take
+extra fish.
+
+- A capture is allowed only in `very_hungry` or `sad`.
+- Only a surplus hookable fish can be taken; at least one creature of every
+  species is always preserved.
+- Duplicate pufferfish are preferred first, then duplicate seahorses, before
+  other eligible duplicates.
+- The whole household has an 8-hour capture cooldown.
+- An automatic hook cycle is idempotent: retrying the same cycle cannot capture
+  a second fish.
+- Stale, future, and arbitrary cycle keys are rejected rather than stored.
+- A captured creature is retained as history with `taken_at` and
+  `taken_reason = 'fish_hook'`; it is removed from the active tank, not deleted.
+
+### Mood mystery event
+
+The tank occasionally stages a short, weird ambient surprise whose outcome
+matches its mood. A thriving tank can reveal a sparkling treasure — the
+**disco pearl** — and turn it into a tiny celebration. A miserable tank can drag
+up an **old boot** and release an extra cloud of murk. These are brief tank events,
+not new screens or tasks; their purpose is to make good and bad care feel alive.
 
 ## What counts as a chore, and when is "today"?
 
@@ -132,7 +189,9 @@ Every qualifying completion:
   zero, panic mode clears itself;
 - logs a `fed` event ("Name fed the aquarium!");
 - every `creature_unlock_interval` completions (25), lays an **egg** for the next
-  undiscovered species, hatching after `egg_incubation_minutes`.
+  undiscovered species, hatching after `egg_incubation_minutes`; once every
+  species is discovered, new eggs balance between pufferfish and seahorses so
+  the tank can develop safe duplicates for future hook stories.
 
 ## Maintenance (`applyAquariumMaintenance`)
 

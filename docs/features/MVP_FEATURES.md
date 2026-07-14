@@ -1,83 +1,45 @@
-# MVP Features
+# Product scope
 
-The app should be built in small phases. Each phase should remain reviewable and avoid adding heavy infrastructure.
+Last verified against the code: **2026-07-13**.
 
-## Phase 1: Project Foundation
+## Primary experience
 
-Goal: make the repository understandable and locally runnable.
+Family Chores is an ambient shared aquarium with one short interaction:
 
-Included:
+1. View the aquarium.
+2. Record who completed a chore and which chore they completed.
+3. See the aquarium respond.
 
-- Project README and documentation
-- Vite React frontend scaffold
-- Cloudflare Worker scaffold
-- Draft D1 schema migration
-- Local development commands
+The household does not log in. The app does not have kiosk mode versus member mode; shared use is the product.
 
-Not included:
+## Parent experience
 
-- Real auth
-- Admin screens
-- Chore completion workflow
-- Due date engine
-- Alerts
-- Allowance or reward system
+The parent PIN unlocks one parent area containing:
 
-## Phase 2: Technical Skeleton And Data Flow
+- recent chore activity and 1-, 7-, and 30-day participation reports
+- family member management
+- chore creation, assignment, recurrence, and activation
+- aquarium tuning and test settings
+- household export and other operational setup
 
-Goal: prove the full path from React to Worker to D1.
+The PIN protects parent actions, not ordinary chore recording.
 
-Implemented foundation:
+## Product constraints
 
-- Seed data for two adults, four children, and sample chores
-- API endpoints for members, chores, completions, recent history, and simple session mode
-- Basic pages for choose mode, member mode, kiosk mode, and history
-- Completing a chore writes a database row
-- History displays recent completions
-- Basic daily and weekly due status is returned with chores
+- One household
+- One shared display workflow
+- Mobile/tablet-friendly controls, optimized for the mounted household screen
+- Automatic return to the aquarium after inactivity
+- No personal logins, remembered identities, device mode selection, or logout
+- No allowance system, billing, OAuth, or multi-household administration
 
-## Phase 3: Household Beta
+Aquarium mood drives the entire ambient tank, not just a status label: lighting,
+sparkle or murk, swimming speed and responsiveness, happy or distressed sounds,
+automatic hook frequency and danger, and short mood-appropriate mystery events.
+The six states run from a dark, sluggish `sad`/panic tank to a literal-sparkle,
+fast and joyful `happy` tank.
 
-Goal: make the app usable enough for a real household trial.
-
-Implemented beta features:
-
-- Parent setup area with simple PIN
-- Manage family members and chores
-- Delete family members from active use while preserving history
-- Activate and deactivate chores
-- Assign chores as household-anyone, one-person, or per-person tasks
-- Member and kiosk chore lists show chores relevant to the selected member
-- Basic daily and weekly due or overdue behavior
-- Today view
-- Improved confirmation flow
-- Cloudflare deployment guidance and deploy scripts
-
-## Deferred Features
-
-Still deferred:
-
-- SMS, email, and push alerts
-- Allowance tracking
-- Advanced recurrence rules
-- OAuth or serious authentication
-- Multi-household support
-- SaaS billing
-
-Lightweight convenience now included:
-
-- Optional completion notes
-- Simple browser reminder prompt
-- Reminder flag for chores
-- Weekly household status
-- Kiosk status summary
-- Ambient display mode
-- Household notes and shopping reminders
-- Monthly chore frequency
-- Lightweight JSON export
-- Smart chore ordering
-- Calm household activity feed
-- Low-light mounted display mode
-- Gentle household rhythm indicators
-- Quick household notes without entering setup
-- Small quick actions for repeated chores
+Aquarium creatures, rewards, mood, and stories may enrich the tank, but they
+should not add competing top-level workflows. Mystery events happen inside the
+tank and require no navigation. New work should make the aquarium → record →
+reaction loop better or help a parent understand and configure that loop.

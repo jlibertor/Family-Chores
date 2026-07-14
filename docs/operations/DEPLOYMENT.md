@@ -61,7 +61,7 @@ After the one-time setup is complete, deploy the Worker and frontend with:
 npm run deploy:prod
 ```
 
-This builds the frontend with `VITE_API_BASE_URL=https://family-chores-api.jlibertor.workers.dev` and deploys Pages as the production branch.
+This applies pending remote D1 migrations before publishing the Worker, builds the frontend with `VITE_API_BASE_URL=https://family-chores-api.jlibertor.workers.dev`, and deploys Pages as the production branch.
 
 ## Deploy Worker Only
 

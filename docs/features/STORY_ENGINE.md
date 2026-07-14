@@ -89,7 +89,7 @@ shared understanding.
 
 ### The cast (reused across all seasons)
 
-The seven aquarium species are the repertory company:
+The nine aquarium species are the repertory company:
 
 | Species (id) | Name | Archetype |
 |---|---|---|
@@ -100,6 +100,8 @@ The seven aquarium species are the repertory company:
 | `pufferfish` | Otto | Comic relief; inflates under stress; secretly shrewd |
 | `starfish` | Stella | Zen wise-fool / prophet; barely moves, knows everything |
 | `clam` | The Clam | The enigma; stays shut; the long-mystery / twist vessel |
+| `happy-jellyfish` | Happy Jellyfish | Buoyant optimist; spreads warmth and cheer through the reef |
+| `benny-fish` | Benny Fish | Loyal Boston Terrier fish; curious, affectionate family companion |
 
 Plus the **bugs** (from the existing "Bug Box" earned-bug system) as the **outcasts /
 wildlings**, and **non-species speakers** (e.g. a `stranger`) which render as a dark
@@ -211,7 +213,7 @@ silhouettes automatically, so villains/extras need no new art.
   "prop": "Optional sentence describing the inexplicable prop.",
   "beats": [
     {
-      "speaker": "crab",          // one of the 7 species ids, OR any other string -> silhouette
+      "speaker": "crab",          // one of the 9 species ids, OR any other string -> silhouette
       "name": "Mr. Pinch",        // display name
       "position": "left",         // 'left' | 'center' | 'right' (fixed stage slot)
       "expression": "hungry",     // AquariumMood: happy|content|peckish|hungry|very_hungry|sad (drives the face)

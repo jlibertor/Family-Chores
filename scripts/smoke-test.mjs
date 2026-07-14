@@ -47,8 +47,33 @@ assert(Array.isArray(status.suggestions), 'Status endpoint should return suggest
 const notes = await request('/api/notes')
 assert(Array.isArray(notes.notes), 'Notes endpoint should return notes.')
 
+const aquarium = await request('/api/aquarium')
+const aquariumMoods = new Set(['happy', 'content', 'peckish', 'hungry', 'very_hungry', 'sad'])
+assert(Array.isArray(aquarium.aquarium?.creatures), 'Aquarium endpoint should return active creatures.')
+assert(aquariumMoods.has(aquarium.aquarium?.state?.mood), 'Aquarium endpoint should return a supported mood.')
+assert(
+  aquarium.aquarium.state.mood === aquarium.aquarium.moodDebug?.mood?.final,
+  'Aquarium state and mood diagnostics should agree.',
+)
+
+const invalidHookCycle = await fetch(`${apiBase}/api/aquarium/hook-take`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ cycleKey: 'not a valid cycle key' }),
+})
+assert(invalidHookCycle.status === 400, 'Fish-hook capture should reject an invalid cycle key.')
+
 const unauthorized = await fetch(`${apiBase}/api/admin/members`)
 assert(unauthorized.status === 401, 'Admin members should require a PIN.')
+const unauthorizedReports = await fetch(`${apiBase}/api/admin/completions`)
+assert(unauthorizedReports.status === 401, 'Parent reports should require a PIN.')
+const retiredPublicHistory = await fetch(`${apiBase}/api/completions/recent`)
+assert(retiredPublicHistory.status === 404, 'Completion reports should no longer be public.')
+
+const retiredMemberSession = await fetch(`${apiBase}/api/session/select-member`, { method: 'POST' })
+const retiredSharedSession = await fetch(`${apiBase}/api/session/kiosk`, { method: 'POST' })
+assert(retiredMemberSession.status === 404, 'Personal-device session selection should be removed.')
+assert(retiredSharedSession.status === 404, 'Selectable kiosk sessions should be removed.')
 
 const adminMembers = await request('/api/admin/members', {
   headers: { 'X-Parent-Pin': parentPin },
@@ -168,7 +193,6 @@ const nicknameCompletion = await request('/api/completions', {
   body: JSON.stringify({
     memberId: temporaryMember.member.id,
     choreId: nicknameChore.chore.id,
-    sessionMode: 'kiosk',
     notes: 'Smoke test nickname completion',
   }),
 })
@@ -199,14 +223,15 @@ const noFeedCompletion = await request('/api/completions', {
   body: JSON.stringify({
     memberId: temporaryMember.member.id,
     choreId: noFeedChore.chore.id,
-    sessionMode: 'kiosk',
     notes: 'Smoke test no fish food completion',
   }),
 })
 assert(noFeedCompletion.completion?.id, 'No-feed completion insert should return an id.')
 assert(noFeedCompletion.aquariumEvent === null, 'Chores with fish feeding off should not feed the aquarium.')
 
-const recentWithNickname = await request('/api/completions/recent')
+const recentWithNickname = await request('/api/admin/completions', {
+  headers: { 'X-Parent-Pin': parentPin },
+})
 assert(
   recentWithNickname.completions.some(
     (completion) =>
@@ -311,21 +336,13 @@ const exported = await request('/api/admin/export', {
 assert(Array.isArray(exported.members), 'Export should include members.')
 assert(Array.isArray(exported.chores), 'Export should include chores.')
 assert(Array.isArray(exported.notes), 'Export should include notes.')
-
-const session = await request('/api/session/kiosk', {
-  method: 'POST',
-  body: JSON.stringify({ deviceLabel: 'Smoke Test Kiosk' }),
-})
-assert(session.session?.id, 'Kiosk session should return an id.')
+assert(Array.isArray(exported.aquariumHookCaptures), 'Export should include fish-hook capture history.')
 
 const completion = await request('/api/completions', {
   method: 'POST',
   body: JSON.stringify({
     memberId: members.members[0].id,
     choreId: chores.chores[0].id,
-    sessionMode: 'kiosk',
-    deviceSessionId: session.session.id,
-    deviceLabel: 'Smoke Test Kiosk',
     notes: 'Smoke test completion',
   }),
 })
@@ -371,7 +388,9 @@ assert(
   'Member bugs endpoint should exclude removed bugs.',
 )
 
-const recent = await request('/api/completions/recent')
+const recent = await request('/api/admin/completions', {
+  headers: { 'X-Parent-Pin': parentPin },
+})
 assert(Array.isArray(recent.completions) && recent.completions.length > 0, 'Recent completions should return rows.')
 
 console.log('Smoke checks passed.')

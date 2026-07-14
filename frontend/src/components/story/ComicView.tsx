@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { CreatureArt, type AquariumMood } from '../aquarium/AquariumView'
+import { CreatureArt, isAquariumSpecies, type AquariumMood } from '../aquarium/CreatureArt'
 
-const SPECIES = new Set(['clownfish', 'seahorse', 'angelfish', 'crab', 'pufferfish', 'starfish', 'clam'])
 const SPEAKER_SPECIES: Record<string, string> = {
   stranger: 'pufferfish',
   gang: 'pufferfish',
@@ -60,7 +59,7 @@ type ComicViewProps = {
 const POSITIONS: BeatPosition[] = ['left', 'center', 'right']
 
 function CharacterPortrait({ beat }: { beat: StoryBeat }) {
-  const speciesId = SPECIES.has(beat.speaker) ? beat.speaker : SPEAKER_SPECIES[beat.speaker]
+  const speciesId = isAquariumSpecies(beat.speaker) ? beat.speaker : SPEAKER_SPECIES[beat.speaker]
 
   return (
     <>

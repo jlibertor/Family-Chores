@@ -2,6 +2,8 @@
 
 This document describes the current household data model. The schema should evolve in small migrations and remain understandable.
 
+Last verified against the code: **2026-07-13**.
+
 ## Family Member
 
 Represents one person in the household.
@@ -88,15 +90,60 @@ Fields:
 
 Each successful chore completion creates one earned bug for the completing member. Bugs are active while `expires_at` is in the future and `removed_at` is blank. They are hidden after 3 days or after removal. Duplicate bug types are allowed.
 
-## Device Session
+## Aquarium Creature
 
-Represents device or browser mode. It is not always the same as the person completing a chore.
+Represents one creature earned by the household aquarium.
 
-Modes:
+Fields:
 
-- `member`: a personal device remembered as one family member
-- `kiosk`: a shared device that asks who is using it first
-- `admin`: parent/setup mode, likely protected by a simple PIN later
+- `id`
+- `species_id`
+- `growth_stage`, such as `baby` or `adult`
+- `taken_at`, nullable; set when a hook permanently removes this creature from the active tank
+- `taken_reason`, nullable; currently `fish_hook` for an automatic hook capture
+- `taken_hook_capture_id`, nullable link to the capture cycle that took it
+- `created_at`
+- `updated_at`
+
+Rows with a blank `taken_at` are active creatures. A taken creature remains in
+the database and household export so the capture has durable history; active
+tank, growth, and species-discovery queries ignore it.
+
+### Hook capture history and safety
+
+An automatic hook attempt includes a stable cycle identifier. The server derives
+the current valid identifier from its own clock and mood, rejects arbitrary keys,
+performs the capture roll, and records the processed cycle and last successful
+capture time. This makes a cycle idempotent across retries and enforces one
+household-wide capture at most every 8 hours.
+
+The server can only mark a surplus hookable fish as taken and must preserve at
+least one active creature of each species. Candidate ordering prefers duplicate
+pufferfish, then duplicate seahorses, then other eligible duplicate fish. The
+client's animation reflects the server result; it does not decide which creature
+is removed.
+
+## Aquarium Hook Capture
+
+Records one durable, idempotent result for each automatic hook cycle.
+
+Fields:
+
+- `id`
+- `cycle_key`, unique
+- `mood`
+- `result`: `reserved`, `taken`, or `skipped`
+- `reason`
+- `creature_id`, nullable
+- `message`, nullable
+- `created_at`
+- `updated_at`
+
+## Device Session (legacy audit storage)
+
+`device_sessions` predates the shared-only product model. New completions create an internal row using the historical `kiosk` database value and the label `Shared aquarium`. This is implementation compatibility, not a selectable application mode or identity session.
+
+Historical rows may still contain `member` or `admin`; the application no longer creates personal-device sessions or exposes session APIs.
 
 Fields:
 
@@ -108,11 +155,6 @@ Fields:
 - `created_at`
 - `last_seen_at`
 
-## Important Rule
+## Important rule
 
-A device session is not always a person. Chore completions must record both the actual family member who completed the chore and, when available, the device session that submitted it.
-
-Examples:
-
-- Emma completed Dishes from Kitchen Kiosk.
-- Emma completed Dishes from Emma's phone.
+The member chosen during the record flow is the person credited with the chore. The app does not infer that person from the browser or remember them after the completion.

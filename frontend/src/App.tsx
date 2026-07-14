@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { avatars, defaultAvatarId, getAvatar } from './avatars'
-import { bugDefinitions, getBugDefinition } from './bugs'
-import { AquariumFriendsView, AquariumView, type AquariumData } from './components/aquarium/AquariumView'
-import { BugPhysicsBox, type ActiveBugViewModel } from './components/bugs/BugPhysicsBox'
+import { getBugDefinition } from './bugs'
+import {
+  AquariumView,
+  type AquariumData,
+  type AquariumHookCapture,
+} from './components/aquarium/AquariumView'
 import { ComicView } from './components/story/ComicView'
-import { SceneStepper } from './components/story/SceneStepper'
 
 type MemberType = 'adult' | 'child'
 type FrequencyType = 'daily' | 'weekdays' | 'weekends' | 'weekly' | 'monthly' | 'as_needed'
@@ -60,8 +62,6 @@ type Completion = {
   responsible_member_avatar_id: string | null
   chore_name: string
   completed_at: string
-  session_mode: 'member' | 'kiosk' | 'admin' | null
-  device_label: string | null
   notes: string | null
 }
 
@@ -75,19 +75,6 @@ type EarnedBug = {
   expires_at: string
   removed_at?: string | null
   removed_reason?: string | null
-}
-
-type SessionState = {
-  id: number
-  mode: 'member' | 'kiosk'
-  memberId: number | null
-  deviceLabel: string
-}
-
-type TodayState = {
-  due: Chore[]
-  overdue: Chore[]
-  completedToday: Completion[]
 }
 
 type HouseholdNote = {
@@ -150,8 +137,6 @@ type AppSettings = {
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
 type HistoryRange = 'today' | '7d' | '30d'
 
-const memberKey = 'family-chores.member-id'
-const sessionKey = 'family-chores.session'
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') ?? ''
 const idleRedirectMs = 3 * 60 * 1000
 const defaultFishTextStartTime = '09:00'
@@ -159,7 +144,7 @@ const defaultFishTextStopTime = '23:00'
 const defaultEggIncubationMinutes = 3 * 24 * 60
 const defaultAppSettings: AppSettings = { test_mode: 0 }
 
-const routes = ['/today', '/display', '/aquarium', '/aquarium-debug', '/aquarium-friends', '/story', '/choose-mode', '/member', '/kiosk', '/history', '/bug-box', '/admin', '/scene-stepper'] as const
+const routes = ['/aquarium', '/record', '/parent'] as const
 
 function currentTimestamp() {
   return Date.now()
@@ -217,6 +202,12 @@ const defaultAquariumConfigDraft: AquariumConfigDraft = {
 
 function isKnownRoute(pathname: string) {
   return routes.includes(pathname as (typeof routes)[number])
+}
+
+function initialRoute() {
+  if (isKnownRoute(window.location.pathname)) return window.location.pathname
+  window.history.replaceState({}, '', '/aquarium')
+  return '/aquarium'
 }
 
 function displayFamilyMemberPublic(member: Pick<Member, 'display_name' | 'nickname'>) {
@@ -307,12 +298,6 @@ function BugIcon({
   )
 }
 
-function ActivityDayBadge({ value }: { value: string }) {
-  const day = activityDayLabel(value)
-
-  return <span className={`activity-day-badge ${day.kind}`}>{day.label}</span>
-}
-
 async function api<T>(path: string, options?: RequestInit, attempts = 2): Promise<T> {
   let lastError: unknown
 
@@ -353,65 +338,23 @@ async function api<T>(path: string, options?: RequestInit, attempts = 2): Promis
   throw lastError instanceof Error ? lastError : new Error('Request failed.')
 }
 
-function getStoredSession() {
-  const raw = localStorage.getItem(sessionKey)
-  if (!raw) return null
-
-  try {
-    return JSON.parse(raw) as SessionState
-  } catch {
-    localStorage.removeItem(sessionKey)
-    return null
-  }
-}
-
 function App() {
-  const [route, setRoute] = useState(() =>
-    isKnownRoute(window.location.pathname) ? window.location.pathname : '/aquarium',
-  )
+  const [route, setRoute] = useState(initialRoute)
   const routeRef = useRef(route)
   const lastActivityRef = useRef(0)
-  const kioskRestoreInFlightRef = useRef(false)
   const [members, setMembers] = useState<Member[]>([])
-  const [chores, setChores] = useState<Chore[]>([])
-  const [memberChores, setMemberChores] = useState<Chore[]>([])
-  const [kioskChores, setKioskChores] = useState<Chore[]>([])
-  const [memberBugs, setMemberBugs] = useState<EarnedBug[]>([])
-  const [bugBoxMemberId, setBugBoxMemberId] = useState<number | null>(null)
+  const [recordChores, setRecordChores] = useState<Chore[]>([])
   const [history, setHistory] = useState<Completion[]>([])
-  const [notes, setNotes] = useState<HouseholdNote[]>([])
   const [aquarium, setAquarium] = useState<AquariumData | null>(null)
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings)
-  const [today, setToday] = useState<TodayState>({ due: [], overdue: [], completedToday: [] })
   const [loadState, setLoadState] = useState<LoadState>('idle')
   const [error, setError] = useState('')
-  const [selectedMemberId, setSelectedMemberId] = useState<number | null>(() => {
-    const storedSession = getStoredSession()
-    if (storedSession?.mode === 'kiosk') {
-      localStorage.removeItem(memberKey)
-      return null
-    }
-
-    const stored = Number(localStorage.getItem(memberKey))
-    return Number.isInteger(stored) && stored > 0 ? stored : null
-  })
-  const [session, setSession] = useState<SessionState | null>(() => getStoredSession())
+  const [recordMemberId, setRecordMemberId] = useState<number | null>(null)
   const [pendingChore, setPendingChore] = useState<Chore | null>(null)
-  const [kioskMemberId, setKioskMemberId] = useState<number | null>(null)
   const [successMessage, setSuccessMessage] = useState('')
   const [successBugId, setSuccessBugId] = useState<string | null>(null)
   const [adminPin, setAdminPin] = useState('')
   const [adminUnlocked, setAdminUnlocked] = useState(false)
-  const [panicPinEntry, setPanicPinEntry] = useState('')
-  const [panicModalOpen, setPanicModalOpen] = useState(false)
-  const [panicError, setPanicError] = useState('')
-  const [panicSubmitting, setPanicSubmitting] = useState(false)
-  const [goodPinEntry, setGoodPinEntry] = useState('')
-  const [goodModalOpen, setGoodModalOpen] = useState(false)
-  const [goodError, setGoodError] = useState('')
-  const [goodSubmitting, setGoodSubmitting] = useState(false)
-  const [textModeSubmitting, setTextModeSubmitting] = useState(false)
-  const [localFishTextActiveUntil, setLocalFishTextActiveUntil] = useState<string | null>(null)
   const [adminMembers, setAdminMembers] = useState<Member[]>([])
   const [adminChores, setAdminChores] = useState<Chore[]>([])
   const [adminNotes, setAdminNotes] = useState<HouseholdNote[]>([])
@@ -421,41 +364,16 @@ function App() {
   const [aquariumConfigDraft, setAquariumConfigDraft] = useState<AquariumConfigDraft>(defaultAquariumConfigDraft)
   const [submitting, setSubmitting] = useState(false)
   const [completionNote, setCompletionNote] = useState('')
-  const [notificationsEnabled] = useState(
-    () => 'Notification' in window && Notification.permission === 'granted',
-  )
-  const [currentTime, setCurrentTime] = useState(() => new Date())
   const [, setIdleRemainingMs] = useState(idleRedirectMs)
+  const [aquariumImmersive, setAquariumImmersive] = useState(false)
 
-  const selectedMember = useMemo(
-    () => members.find((member) => member.id === selectedMemberId) ?? null,
-    [members, selectedMemberId],
+  const recordMember = useMemo(
+    () => members.find((member) => member.id === recordMemberId) ?? null,
+    [members, recordMemberId],
   )
-  const kioskMember = useMemo(
-    () => members.find((member) => member.id === kioskMemberId) ?? null,
-    [members, kioskMemberId],
-  )
-  const isMemberBugBoxLocked = Boolean(selectedMemberId) && session?.mode !== 'kiosk'
-  const activeBugBoxMemberId = isMemberBugBoxLocked ? selectedMemberId : bugBoxMemberId
-  const canSwitchBugBoxMember = !isMemberBugBoxLocked
-  const bugBoxMember = useMemo(
-    () => members.find((member) => member.id === activeBugBoxMemberId) ?? null,
-    [activeBugBoxMemberId, members],
-  )
-  const memberDueChores = sortChoresForHousehold(memberChores.filter((chore) => chore.is_due === 1))
-  const memberOtherChores = sortChoresForHousehold(memberChores.filter((chore) => chore.is_due !== 1))
-  const kioskDueChores = sortChoresForHousehold(kioskChores.filter((chore) => chore.is_due === 1))
-  const kioskOtherChores = sortChoresForHousehold(kioskChores.filter((chore) => chore.is_due !== 1))
-  const deviceViewLabel = session?.mode === 'kiosk' ? 'Kiosk view' : selectedMemberId ? 'My view' : 'Login'
-  const householdSessionLabel = session?.mode === 'kiosk' ? 'Kiosk' : selectedMember ? displayFamilyMemberPublic(selectedMember) : ''
-  const currentLoginLabel = session?.mode === 'kiosk'
-    ? 'Kiosk mode'
-    : selectedMember
-      ? displayFamilyMemberPublic(selectedMember)
-      : 'Login'
+  const recordDueChores = sortChoresForHousehold(recordChores.filter((chore) => chore.is_due === 1))
+  const recordOtherChores = sortChoresForHousehold(recordChores.filter((chore) => chore.is_due !== 1))
   const testMode = appSettings.test_mode === 1
-  const setupMember = session?.mode === 'kiosk' ? kioskMember : selectedMember
-  const canAccessSetup = setupMember?.member_type === 'adult'
 
   function resetIdleTimer() {
     markIdleActivity(lastActivityRef, setIdleRemainingMs)
@@ -463,6 +381,11 @@ function App() {
 
   function navigate(nextRoute: string) {
     resetIdleTimer()
+    setAquariumImmersive(false)
+    if (routeRef.current === '/parent' && nextRoute !== '/parent') {
+      setAdminUnlocked(false)
+      setAdminPin('')
+    }
     window.history.pushState({}, '', nextRoute)
     setRoute(nextRoute)
     setError('')
@@ -471,29 +394,15 @@ function App() {
     setSuccessBugId(null)
   }
 
-  function clearMemberSessionState() {
-    localStorage.removeItem(memberKey)
-    localStorage.removeItem(sessionKey)
-    setSelectedMemberId(null)
-    setSession(null)
-    setMemberChores([])
-    setBugBoxMemberId(null)
-    setKioskMemberId(null)
-    setKioskChores([])
-    setPendingChore(null)
-    setCompletionNote('')
-  }
-
   // Refs mirror state so the 20s auto-refresh interval (created once on mount)
   // never works from a stale closure, and so out-of-order responses can be
   // dropped: a slow refresh started BEFORE a chore completion must not
   // overwrite the fresher post-completion aquarium state (the fish would
   // briefly "forget" the chore).
   const refreshSeqRef = useRef(0)
-  const selectedMemberIdRef = useRef(selectedMemberId)
-  selectedMemberIdRef.current = selectedMemberId
-  const kioskMemberIdRef = useRef(kioskMemberId)
-  kioskMemberIdRef.current = kioskMemberId
+  const pendingHookCaptureRef = useRef<AquariumHookCapture | null>(null)
+  const recordMemberIdRef = useRef(recordMemberId)
+  recordMemberIdRef.current = recordMemberId
 
   async function refreshHousehold(silent = false) {
     const seq = ++refreshSeqRef.current
@@ -503,12 +412,8 @@ function App() {
     setError('')
 
     try {
-      const [memberData, choreData, todayData, noteData, historyData, aquariumData, settingsData] = await Promise.all([
+      const [memberData, aquariumData, settingsData] = await Promise.all([
         api<{ ok: boolean; members: Member[] }>('/api/members'),
-        api<{ ok: boolean; chores: Chore[] }>('/api/chores'),
-        api<TodayState & { ok: boolean }>('/api/today'),
-        api<{ ok: boolean; notes: HouseholdNote[] }>('/api/notes'),
-        api<{ ok: boolean; completions: Completion[] }>('/api/completions/recent'),
         api<{ ok: boolean; aquarium: AquariumData }>('/api/aquarium'),
         api<{ ok: boolean; settings: AppSettings }>('/api/settings'),
       ])
@@ -516,39 +421,23 @@ function App() {
       if (seq !== refreshSeqRef.current) return
 
       setMembers(memberData.members)
-      setChores(choreData.chores)
-      setToday({
-        due: todayData.due,
-        overdue: todayData.overdue,
-        completedToday: todayData.completedToday,
-      })
-      setNotes(noteData.notes)
-      setHistory(historyData.completions)
-      setAquarium(aquariumData.aquarium)
+      const pendingCapture = pendingHookCaptureRef.current
+      const refreshedAquarium = aquariumData.aquarium
+      setAquarium(
+        pendingCapture && !refreshedAquarium.creatures.some((creature) => creature.id === pendingCapture.creature.id)
+          ? { ...refreshedAquarium, creatures: [...refreshedAquarium.creatures, pendingCapture.creature] }
+          : refreshedAquarium,
+      )
       setAppSettings(settingsData.settings)
 
       const activeMemberIds = new Set(memberData.members.map((member) => member.id))
-      const currentSelectedMemberId = selectedMemberIdRef.current
-      const currentKioskMemberId = kioskMemberIdRef.current
+      const currentRecordMemberId = recordMemberIdRef.current
 
-      if (currentSelectedMemberId && activeMemberIds.has(currentSelectedMemberId)) {
-        setMemberChores(await loadChoresForMember(currentSelectedMemberId))
-      } else if (currentSelectedMemberId) {
-        localStorage.removeItem(memberKey)
-        setSelectedMemberId(null)
-        setMemberChores([])
-        setSession((current) => {
-          if (current?.mode !== 'member') return current
-          localStorage.removeItem(sessionKey)
-          return null
-        })
-      }
-
-      if (currentKioskMemberId && activeMemberIds.has(currentKioskMemberId)) {
-        setKioskChores(await loadChoresForMember(currentKioskMemberId))
-      } else if (currentKioskMemberId) {
-        setKioskMemberId(null)
-        setKioskChores([])
+      if (currentRecordMemberId && activeMemberIds.has(currentRecordMemberId)) {
+        setRecordChores(await loadChoresForMember(currentRecordMemberId))
+      } else if (currentRecordMemberId) {
+        setRecordMemberId(null)
+        setRecordChores([])
       }
 
       setLoadState('ready')
@@ -560,7 +449,7 @@ function App() {
   }
 
   async function loadAdminData(pin = adminPin) {
-    const [memberData, choreData, noteData, aquariumConfigData] = await Promise.all([
+    const [memberData, choreData, noteData, aquariumConfigData, historyData] = await Promise.all([
       api<{ ok: boolean; members: Member[] }>('/api/admin/members', {
         headers: { 'X-Parent-Pin': pin },
       }),
@@ -573,12 +462,16 @@ function App() {
       api<{ ok: boolean; config: AquariumConfigDraft }>('/api/admin/aquarium-config', {
         headers: { 'X-Parent-Pin': pin },
       }),
+      api<{ ok: boolean; completions: Completion[] }>('/api/admin/completions', {
+        headers: { 'X-Parent-Pin': pin },
+      }),
     ])
 
     setAdminMembers(memberData.members)
     setAdminChores(choreData.chores)
     setAdminNotes(noteData.notes)
     setAquariumConfigDraft(toAquariumConfigDraft(aquariumConfigData.config))
+    setHistory(historyData.completions)
   }
 
   async function loadChoresForMember(memberId: number) {
@@ -586,36 +479,78 @@ function App() {
     return data.chores
   }
 
-  async function loadBugsForMember(memberId: number) {
-    const data = await api<{ ok: boolean; bugs: EarnedBug[] }>(`/api/members/${memberId}/bugs`)
-    return data.bugs
+  async function requestFishHookTake(cycleKey: string): Promise<AquariumHookCapture | null> {
+    // Invalidate any aquarium refresh that began before this persistent event.
+    refreshSeqRef.current += 1
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const data = await api<{
+          ok: boolean
+          takenCreature: AquariumHookCapture['creature'] | null
+          message: string | null
+          skipped: boolean
+        }>('/api/aquarium/hook-take', {
+          method: 'POST',
+          body: JSON.stringify({ cycleKey }),
+        })
+        if (!data.takenCreature) return null
+        const capture = {
+          creature: data.takenCreature,
+          message: data.message ?? 'The hook carried away one of the duplicate fish.',
+        }
+        pendingHookCaptureRef.current = capture
+        setAquarium((current) => current && !current.creatures.some((creature) => creature.id === capture.creature.id)
+          ? { ...current, creatures: [...current.creatures, capture.creature] }
+          : current)
+        return capture
+      } catch {
+        if (attempt === 0) {
+          // The endpoint is idempotent by cycle key, so one retry can recover a
+          // response that was lost after the server already recorded the take.
+          await new Promise((resolve) => window.setTimeout(resolve, 250))
+        }
+      }
+    }
+    // Hook drops are ambient surprises. Network trouble should leave the
+    // aquarium alone rather than surfacing an alarming kiosk error.
+    return null
   }
 
-  async function removeEarnedBug(earnedBugId: string) {
-    await api<{ ok: boolean; bug: EarnedBug }>(`/api/bugs/${earnedBugId}/remove`, {
-      method: 'POST',
-      body: JSON.stringify({ reason: 'overclicked' }),
-    })
-
-    setMemberBugs((current) => current.filter((bug) => String(bug.id) !== earnedBugId))
+  function finishFishHookCapture(capture: AquariumHookCapture) {
+    if (pendingHookCaptureRef.current?.creature.id === capture.creature.id) {
+      pendingHookCaptureRef.current = null
+    }
+    setAquarium((current) => current
+      ? { ...current, creatures: current.creatures.filter((creature) => creature.id !== capture.creature.id) }
+      : current)
+    setSuccessMessage(capture.message)
+    window.setTimeout(() => {
+      setSuccessMessage((current) => current === capture.message ? '' : current)
+    }, 6_000)
   }
 
   useEffect(() => {
     void Promise.resolve().then(() => refreshHousehold())
-    const clock = window.setInterval(() => setCurrentTime(new Date()), 30_000)
     const refresh = window.setInterval(() => {
       void refreshHousehold(true)
     }, 20_000)
 
     const onPopState = () => {
       const nextRoute = isKnownRoute(window.location.pathname) ? window.location.pathname : '/aquarium'
+      if (!isKnownRoute(window.location.pathname)) {
+        window.history.replaceState({}, '', '/aquarium')
+      }
+      setAquariumImmersive(false)
+      if (routeRef.current === '/parent' && nextRoute !== '/parent') {
+        setAdminUnlocked(false)
+        setAdminPin('')
+      }
       setRoute(nextRoute)
       resetIdleTimer()
     }
 
     window.addEventListener('popstate', onPopState)
     return () => {
-      window.clearInterval(clock)
       window.clearInterval(refresh)
       window.removeEventListener('popstate', onPopState)
     }
@@ -624,30 +559,6 @@ function App() {
   useEffect(() => {
     routeRef.current = route
   }, [route])
-
-  useEffect(() => {
-    if (route !== '/aquarium' || session?.mode === 'kiosk' || kioskRestoreInFlightRef.current) {
-      return
-    }
-
-    kioskRestoreInFlightRef.current = true
-    clearMemberSessionState()
-
-    void api<{ ok: boolean; session: SessionState }>('/api/session/kiosk', {
-      method: 'POST',
-      body: JSON.stringify({ deviceLabel: 'Kitchen Tablet' }),
-    })
-      .then((data) => {
-        localStorage.setItem(sessionKey, JSON.stringify(data.session))
-        setSession(data.session)
-      })
-      .catch((currentError) => {
-        setError(currentError instanceof Error ? currentError.message : 'Could not restore kiosk mode.')
-      })
-      .finally(() => {
-        kioskRestoreInFlightRef.current = false
-      })
-  }, [route, session?.mode])
 
   useEffect(() => {
     const activityEvents: Array<keyof WindowEventMap> = ['pointerdown', 'keydown', 'touchstart', 'scroll']
@@ -666,12 +577,12 @@ function App() {
         return
       }
 
-      if (routeRef.current === '/aquarium') {
-        markIdleActivity(lastActivityRef, setIdleRemainingMs)
-        return
-      }
-
       markIdleActivity(lastActivityRef, setIdleRemainingMs)
+      setAquariumImmersive(true)
+      if (routeRef.current === '/aquarium') return
+
+      setAdminUnlocked(false)
+      setAdminPin('')
       window.history.pushState({}, '', '/aquarium')
       setRoute('/aquarium')
       setError('')
@@ -689,115 +600,18 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!selectedMemberId) {
+    if (!recordMemberId) {
       return
     }
 
-    void loadChoresForMember(selectedMemberId)
-      .then(setMemberChores)
+    void loadChoresForMember(recordMemberId)
+      .then(setRecordChores)
       .catch((currentError) =>
-        setError(currentError instanceof Error ? currentError.message : 'Could not load member chores.'),
+        setError(currentError instanceof Error ? currentError.message : 'Could not load chores.'),
       )
-  }, [selectedMemberId])
+  }, [recordMemberId])
 
-  useEffect(() => {
-    if (!kioskMemberId) {
-      return
-    }
-
-    void loadChoresForMember(kioskMemberId)
-      .then(setKioskChores)
-      .catch((currentError) =>
-        setError(currentError instanceof Error ? currentError.message : 'Could not load kiosk chores.'),
-      )
-  }, [kioskMemberId])
-
-  useEffect(() => {
-    if (!activeBugBoxMemberId) {
-      void Promise.resolve().then(() => setMemberBugs([]))
-      return
-    }
-
-    void loadBugsForMember(activeBugBoxMemberId)
-      .then(setMemberBugs)
-      .catch((currentError) =>
-        setError(currentError instanceof Error ? currentError.message : 'Could not load Bug Box.'),
-      )
-  }, [activeBugBoxMemberId])
-
-  async function chooseMemberDevice(memberId: number) {
-    setError('')
-
-    try {
-      const member = members.find((item) => item.id === memberId)
-      const data = await api<{ ok: boolean; session: SessionState }>('/api/session/select-member', {
-        method: 'POST',
-        body: JSON.stringify({
-          memberId,
-          deviceLabel: member ? `${displayFamilyMemberPublic(member)} Device` : 'Personal Device',
-        }),
-      })
-
-      localStorage.setItem(memberKey, String(memberId))
-      localStorage.setItem(sessionKey, JSON.stringify(data.session))
-      setMemberChores([])
-      setBugBoxMemberId(null)
-      setKioskChores([])
-      setKioskMemberId(null)
-      setSelectedMemberId(memberId)
-      setSession(data.session)
-      navigate('/member')
-    } catch (currentError) {
-      setError(currentError instanceof Error ? currentError.message : 'Could not select this member.')
-    }
-  }
-
-  function changeMemberDevice() {
-    localStorage.removeItem(memberKey)
-    if (session?.mode === 'member') {
-      localStorage.removeItem(sessionKey)
-      setSession(null)
-    }
-    setSelectedMemberId(null)
-    setBugBoxMemberId(null)
-    setMemberChores([])
-    setPendingChore(null)
-    setCompletionNote('')
-  }
-
-  async function chooseKioskDevice() {
-    setError('')
-
-    try {
-      const data = await api<{ ok: boolean; session: SessionState }>('/api/session/kiosk', {
-        method: 'POST',
-        body: JSON.stringify({ deviceLabel: 'Kitchen Tablet' }),
-      })
-
-      localStorage.removeItem(memberKey)
-      localStorage.setItem(sessionKey, JSON.stringify(data.session))
-      setSelectedMemberId(null)
-      setMemberChores([])
-      setBugBoxMemberId(null)
-      setSession(data.session)
-      setKioskMemberId(null)
-      navigate('/kiosk')
-    } catch (currentError) {
-      setError(currentError instanceof Error ? currentError.message : 'Could not start kiosk mode.')
-    }
-  }
-
-  function logoutKioskMode() {
-    localStorage.removeItem(sessionKey)
-    setSession(null)
-    setKioskMemberId(null)
-    setKioskChores([])
-    setPendingChore(null)
-    setCompletionNote('')
-    navigate('/choose-mode')
-  }
-
-  async function submitCompletion(memberId: number, chore: Chore, mode: 'member' | 'kiosk') {
+  async function submitCompletion(memberId: number, chore: Chore) {
     setError('')
     setSubmitting(true)
 
@@ -812,12 +626,9 @@ function App() {
         body: JSON.stringify({
           memberId,
           choreId: chore.id,
-          sessionMode: mode,
-        deviceSessionId: session?.mode === mode ? session.id : undefined,
-        deviceLabel: session?.deviceLabel,
-        notes: completionNote,
-      }),
-    })
+          notes: completionNote,
+        }),
+      })
 
       const member = members.find((item) => item.id === memberId)
       const memberName = member ? displayFamilyMemberPublic(member) : 'Someone'
@@ -825,28 +636,22 @@ function App() {
       const completionMessage = data.aquariumEvent
         ? `${memberName} fed the aquarium${bug ? ` and caught a ${bug.displayName}!` : '!'}`
         : `${memberName} completed ${chore.name}${bug ? ` and caught a ${bug.displayName}!` : '!'}`
-      setSuccessMessage(data.storyUnlock?.newlyUnlocked ? `${completionMessage} New story panel unlocked!` : completionMessage)
+      const finalMessage = data.storyUnlock?.newlyUnlocked ? `${completionMessage} New story panel unlocked!` : completionMessage
       // Apply the fresh post-completion aquarium state immediately so the fish
       // visibly react to the chore before the full refresh lands.
       if (data.aquariumEvent?.state) {
         const eventState = data.aquariumEvent.state
         setAquarium((current) => (current ? { ...current, state: { ...current.state, ...eventState } } : current))
       }
-      setSuccessBugId(bug?.id ?? null)
-      maybeShowCompletionNotification(memberName, chore.name)
       setPendingChore(null)
       setCompletionNote('')
       await refreshHousehold()
       const refreshedChores = await loadChoresForMember(memberId)
-      const refreshedBugs = await loadBugsForMember(memberId)
-      setMemberBugs(refreshedBugs)
-
-      if (mode === 'kiosk') {
-        setKioskChores(refreshedChores)
-        setKioskMemberId(null)
-      } else {
-        setMemberChores(refreshedChores)
-      }
+      setRecordChores(refreshedChores)
+      setRecordMemberId(null)
+      navigate('/aquarium')
+      setSuccessMessage(finalMessage)
+      setSuccessBugId(bug?.id ?? null)
     } catch (currentError) {
       setError(currentError instanceof Error ? currentError.message : 'Could not save that completion.')
     } finally {
@@ -898,9 +703,9 @@ function App() {
         headers: { 'X-Parent-Pin': adminPin },
       })
 
-      if (selectedMemberId === member.id) {
-        localStorage.removeItem(memberKey)
-        setSelectedMemberId(null)
+      if (recordMemberId === member.id) {
+        setRecordMemberId(null)
+        setRecordChores([])
       }
 
       setMemberDraft(emptyMemberDraft)
@@ -1007,64 +812,6 @@ function App() {
     }
   }
 
-  async function submitPanic(pin: string, isActive: boolean) {
-    setPanicError('')
-    setPanicSubmitting(true)
-    try {
-      await api('/api/admin/aquarium-panic', {
-        method: isActive ? 'DELETE' : 'POST',
-        headers: { 'X-Parent-Pin': pin },
-      })
-      setPanicModalOpen(false)
-      setPanicPinEntry('')
-      await refreshHousehold()
-    } catch {
-      setPanicError('Wrong PIN or something went wrong.')
-    } finally {
-      setPanicSubmitting(false)
-    }
-  }
-
-  async function submitEverythingGood(pin: string) {
-    setGoodError('')
-    setGoodSubmitting(true)
-    try {
-      await api('/api/admin/aquarium-everything-good', {
-        method: 'POST',
-        headers: { 'X-Parent-Pin': pin },
-      })
-      setGoodModalOpen(false)
-      setGoodPinEntry('')
-      setSuccessMessage('Everything good. The fish will stay happy for 4 hours.')
-      await refreshHousehold()
-    } catch {
-      setGoodError('Wrong PIN or something went wrong.')
-    } finally {
-      setGoodSubmitting(false)
-    }
-  }
-
-  async function textCurrentAquariumMode() {
-    setError('')
-    setSuccessMessage('')
-    setTextModeSubmitting(true)
-
-    try {
-      const data = await api<{ ok: boolean; result: { sent: boolean; skipped: boolean; reason?: string } }>('/api/fish-notifications/current-mode', {
-        method: 'POST',
-      })
-      if (data.result.sent) {
-        setLocalFishTextActiveUntil(new Date(Date.now() + 60_000).toISOString())
-      }
-      await refreshHousehold(true)
-      setSuccessMessage(data.result.reason === 'quiet_hours' ? 'Fish text skipped outside the text window.' : data.result.skipped ? 'Fish text was just sent.' : 'Fish text sent.')
-    } catch (currentError) {
-      setError(currentError instanceof Error ? currentError.message : 'Could not send fish text.')
-    } finally {
-      setTextModeSubmitting(false)
-    }
-  }
-
   async function exportHouseholdData() {
     setError('')
 
@@ -1085,46 +832,19 @@ function App() {
     }
   }
 
-  function maybeShowCompletionNotification(memberName: string, choreName: string) {
-    if (notificationsEnabled && 'Notification' in window && Notification.permission === 'granted') {
-      new Notification('Chore completed', {
-        body: `${memberName} completed ${choreName}.`,
-      })
-    }
-  }
-
-  function openDeviceView() {
-    if (session?.mode === 'kiosk') {
-      navigate('/kiosk')
-      return
-    }
-
-    if (selectedMemberId) {
-      navigate('/member')
-      return
-    }
-
-    navigate('/choose-mode')
-  }
-
   return (
-    <main className="app-shell">
+    <main className={`app-shell${aquariumImmersive && route === '/aquarium' ? ' aquarium-immersive-shell' : ''}`}>
       <header className="top-bar">
         <button type="button" className="brand-button" onClick={() => navigate('/aquarium')}>
           Family Chores
         </button>
         <nav aria-label="Main navigation">
           <button type="button" onClick={() => navigate('/aquarium')}>Aquarium</button>
-          <button type="button" onClick={() => navigate('/aquarium-friends')}>Friends</button>
-          <button type="button" onClick={() => navigate('/story')}>Story</button>
-          <button type="button" onClick={() => navigate('/display')}>Household</button>
-          <button type="button" onClick={openDeviceView}>{deviceViewLabel}</button>
-          <button type="button" onClick={() => navigate('/bug-box')}>Bug Box</button>
-          {canAccessSetup && <button type="button" onClick={() => navigate('/admin')}>Setup</button>}
+          <button type="button" onClick={() => navigate('/record')}>Record chore</button>
+          <button type="button" onClick={() => navigate('/parent')}>Parent</button>
         </nav>
         <div className="header-status">
           {testMode && <span className="test-mode-badge">Test mode</span>}
-          <span className="idle-countdown" aria-live="polite">{currentLoginLabel}</span>
         </div>
       </header>
 
@@ -1140,94 +860,46 @@ function App() {
       {route === '/aquarium' && (
         <AquariumView
           aquarium={aquarium}
-          fishTextActiveUntil={getActiveFishTextUntil(localFishTextActiveUntil, aquarium?.state.fish_text_active_until ?? null)}
-          onRecord={() => navigate('/choose-mode')}
-          onFriends={() => navigate('/aquarium-friends')}
-          onPanic={() => { setPanicPinEntry(''); setPanicError(''); setPanicModalOpen(true) }}
-          onEverythingGood={() => { setGoodPinEntry(''); setGoodError(''); setGoodModalOpen(true) }}
-          onTextMode={() => void textCurrentAquariumMode()}
-          onDebug={() => navigate('/aquarium-debug')}
-          textModeSubmitting={textModeSubmitting}
+          immersive={aquariumImmersive}
+          fishTextActiveUntil={aquarium?.state.fish_text_active_until ?? null}
+          onEnterImmersive={() => {
+            setAquariumImmersive(true)
+            resetIdleTimer()
+          }}
+          onExitImmersive={() => {
+            setAquariumImmersive(false)
+            resetIdleTimer()
+          }}
+          onHookTake={requestFishHookTake}
+          onHookCaptureFinished={finishFishHookCapture}
+          onRecord={() => navigate('/record')}
           testMode={testMode}
         />
       )}
 
-      {route === '/aquarium-debug' && <AquariumMoodDebugView aquarium={aquarium} />}
-
-      {route === '/aquarium-friends' && <AquariumFriendsView aquarium={aquarium} />}
-
-      {(route === '/display' || route === '/today') && (
-        <HouseholdDashboard
-          today={today}
-          members={members}
-          notes={notes}
-          history={history}
-          currentTime={currentTime}
-          sessionLabel={householdSessionLabel}
-          selectedMember={selectedMember}
-          memberChores={memberChores}
-          memberBugs={selectedMember ? memberBugs : []}
-          onRecord={() => navigate('/choose-mode')}
-          onHistory={() => navigate('/history')}
-          onBugBox={() => navigate('/bug-box')}
-        />
-      )}
-
-      {route === '/choose-mode' && (
-        <section className="screen">
+      {route === '/record' && (
+        <section className="screen record-screen">
           <div className="screen-heading">
-            <p className="eyebrow">Choose mode</p>
-            <h1>How is this device used?</h1>
-          </div>
-
-          <div className="choice-grid">
-            <section className="panel">
-              <h2>This is my device</h2>
-              <p>Pick a family member and this browser will remember them.</p>
-              <div className="button-grid">
-                {members.map((member) => (
-                  <button key={member.id} type="button" className="member-choice" onClick={() => void chooseMemberDevice(member.id)}>
-                    <AvatarIcon avatarId={member.avatar_id} name={displayFamilyMemberPublic(member)} size="medium" />
-                    <span>{displayFamilyMemberPublic(member)}</span>
-                  </button>
-                ))}
-              </div>
-            </section>
-
-            <section className="panel">
-              <h2>This is a shared kiosk</h2>
-              <p>Use this for a kitchen tablet or shared household screen.</p>
-              <button type="button" className="primary-action" onClick={() => void chooseKioskDevice()}>
-                Start kiosk mode
-              </button>
-            </section>
-          </div>
-        </section>
-      )}
-
-      {route === '/member' && (
-        <section className="screen">
-          <div className="screen-heading">
-            <p className="eyebrow">Member mode</p>
-            <div className="member-heading-row">
-              <h1 className="avatar-heading">
-                {selectedMember && (
-                  <AvatarIcon avatarId={selectedMember.avatar_id} name={displayFamilyMemberPublic(selectedMember)} size="large" />
-                )}
-                <span>{selectedMember ? displayFamilyMemberPublic(selectedMember) : 'Choose your name'}</span>
-              </h1>
-              {selectedMember && (
-                <button type="button" className="secondary-action member-change-action" onClick={changeMemberDevice}>
-                  Change member
-                </button>
+            <p className="eyebrow">Record a chore</p>
+            <h1 className="avatar-heading">
+              {recordMember && (
+                <AvatarIcon avatarId={recordMember.avatar_id} name={displayFamilyMemberPublic(recordMember)} size="large" />
               )}
-            </div>
+              <span>{recordMember ? displayFamilyMemberPublic(recordMember) : 'Who finished it?'}</span>
+            </h1>
           </div>
 
-          {!selectedMember && (
-            <div className="button-grid">
+          {!recordMember && (
+            <div className="button-grid large">
               {members.map((member) => (
-                <button key={member.id} type="button" className="member-choice" onClick={() => void chooseMemberDevice(member.id)}>
+                <button
+                  key={member.id}
+                  type="button"
+                  onClick={() => {
+                    setRecordChores([])
+                    setRecordMemberId(member.id)
+                  }}
+                >
                   <AvatarIcon avatarId={member.avatar_id} name={displayFamilyMemberPublic(member)} size="medium" />
                   <span>{displayFamilyMemberPublic(member)}</span>
                 </button>
@@ -1235,79 +907,31 @@ function App() {
             </div>
           )}
 
-          {selectedMember && (
-            <ChorePicker
-              dueChores={memberDueChores}
-              otherChores={memberOtherChores}
-              pendingChore={pendingChore}
-              memberName={displayFamilyMemberPublic(selectedMember)}
-              memberAvatarId={selectedMember.avatar_id}
-              onPick={setPendingChore}
-              onCancel={() => {
-                setPendingChore(null)
-                setCompletionNote('')
-              }}
-              onConfirm={(chore) => void submitCompletion(selectedMember.id, chore, 'member')}
-              submitting={submitting}
-              note={completionNote}
-              onNoteChange={setCompletionNote}
-            />
-          )}
-        </section>
-      )}
-
-      {route === '/kiosk' && (
-        <section className="screen kiosk-screen">
-          <div className="screen-heading">
-            <p className="eyebrow">Kiosk mode</p>
-            <h1 className="avatar-heading">
-              {kioskMember && (
-                <AvatarIcon avatarId={kioskMember.avatar_id} name={displayFamilyMemberPublic(kioskMember)} size="large" />
-              )}
-              <span>{kioskMember ? displayFamilyMemberPublic(kioskMember) : 'Who finished a chore?'}</span>
-            </h1>
-          </div>
-
-          {!kioskMember && (
+          {recordMember && (
             <>
-              <div className="button-grid large">
-                {members.map((member) => (
-                  <button
-                    key={member.id}
-                    type="button"
-                    onClick={() => {
-                      setKioskChores([])
-                      setKioskMemberId(member.id)
-                    }}
-                  >
-                    <AvatarIcon avatarId={member.avatar_id} name={displayFamilyMemberPublic(member)} size="medium" />
-                    <span>{displayFamilyMemberPublic(member)}</span>
-                  </button>
-                ))}
-              </div>
-              <button type="button" className="secondary-action kiosk-logout-action" onClick={logoutKioskMode}>
-                Log out of kiosk mode
-              </button>
-            </>
-          )}
-
-          {kioskMember && (
-            <>
-              <button type="button" className="secondary-action" onClick={() => setKioskMemberId(null)}>
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={() => {
+                  setRecordMemberId(null)
+                  setPendingChore(null)
+                  setCompletionNote('')
+                }}
+              >
                 Change person
               </button>
               <ChorePicker
-                dueChores={kioskDueChores}
-                otherChores={kioskOtherChores}
+                dueChores={recordDueChores}
+                otherChores={recordOtherChores}
                 pendingChore={pendingChore}
-                memberName={displayFamilyMemberPublic(kioskMember)}
-                memberAvatarId={kioskMember.avatar_id}
+                memberName={displayFamilyMemberPublic(recordMember)}
+                memberAvatarId={recordMember.avatar_id}
                 onPick={setPendingChore}
                 onCancel={() => {
                   setPendingChore(null)
                   setCompletionNote('')
                 }}
-                onConfirm={(chore) => void submitCompletion(kioskMember.id, chore, 'kiosk')}
+                onConfirm={(chore) => void submitCompletion(recordMember.id, chore)}
                 submitting={submitting}
                 note={completionNote}
                 onNoteChange={setCompletionNote}
@@ -1317,35 +941,14 @@ function App() {
         </section>
       )}
 
-      {route === '/history' && <HistoryView history={history} members={members} chores={chores} />}
-
-      {route === '/story' && (
-        <ComicView apiBaseUrl={apiBaseUrl} members={members} />
-      )}
-
-      {route === '/scene-stepper' && canAccessSetup && (
-        <SceneStepper apiBaseUrl={apiBaseUrl} onExit={() => navigate('/admin')} />
-      )}
-
-      {route === '/bug-box' && (
-        <BugBoxView
-          members={members}
-          selectedMember={bugBoxMember}
-          bugs={memberBugs}
-          selectedMemberId={activeBugBoxMemberId}
-          canSwitchMembers={canSwitchBugBoxMember}
-          onSelectMember={setBugBoxMemberId}
-          onExplodeBug={removeEarnedBug}
-        />
-      )}
-
-      {route === '/admin' && canAccessSetup && (
+      {route === '/parent' && (
         <AdminView
           apiBaseUrl={apiBaseUrl}
           pin={adminPin}
           unlocked={adminUnlocked}
           members={adminMembers}
           chores={adminChores}
+          history={history}
           memberDraft={memberDraft}
           choreDraft={choreDraft}
           noteDraft={noteDraft}
@@ -1369,425 +972,7 @@ function App() {
         />
       )}
 
-      {route === '/admin' && !canAccessSetup && (
-        <section className="screen">
-          <div className="screen-heading">
-            <p className="eyebrow">Setup</p>
-            <h1>Parent setup</h1>
-            <p className="empty-state">Log in as an adult to open setup.</p>
-          </div>
-        </section>
-      )}
-
-      {panicModalOpen && (
-        <div className="modal-overlay" onClick={() => setPanicModalOpen(false)}>
-          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
-            <h2>{aquarium?.state.panic_mode ? 'Clear panic mode' : '🚨 Panic mode'}</h2>
-            <p>
-              {aquarium?.state.panic_mode
-                ? 'Enter your parent PIN to cancel panic mode early.'
-                : 'Chores weren\'t done right. Enter your parent PIN to make the fish sad until 3 real chores are completed.'}
-            </p>
-            <input
-              type="password"
-              inputMode="numeric"
-              placeholder="Parent PIN"
-              value={panicPinEntry}
-              className="pin-input"
-              autoFocus
-              onChange={(e) => { setPanicPinEntry(e.target.value); setPanicError('') }}
-              onKeyDown={(e) => { if (e.key === 'Enter' && panicPinEntry) void submitPanic(panicPinEntry, !!aquarium?.state.panic_mode) }}
-            />
-            {panicError && <p className="notice error">{panicError}</p>}
-            <div className="modal-actions">
-              <button
-                type="button"
-                className="primary-action"
-                disabled={!panicPinEntry || panicSubmitting}
-                onClick={() => void submitPanic(panicPinEntry, !!aquarium?.state.panic_mode)}
-              >
-                {panicSubmitting ? 'Saving…' : aquarium?.state.panic_mode ? 'Clear panic' : 'Activate panic'}
-              </button>
-              <button type="button" className="secondary-action" onClick={() => setPanicModalOpen(false)}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {goodModalOpen && (
-        <div className="modal-overlay" onClick={() => setGoodModalOpen(false)}>
-          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
-            <h2>✅ Everything good</h2>
-            <p>Enter your parent PIN to make the fish happy for 4 hours.</p>
-            <input
-              type="password"
-              inputMode="numeric"
-              placeholder="Parent PIN"
-              value={goodPinEntry}
-              className="pin-input"
-              autoFocus
-              onChange={(e) => { setGoodPinEntry(e.target.value); setGoodError('') }}
-              onKeyDown={(e) => { if (e.key === 'Enter' && goodPinEntry) void submitEverythingGood(goodPinEntry) }}
-            />
-            {goodError && <p className="notice error">{goodError}</p>}
-            <div className="modal-actions">
-              <button
-                type="button"
-                className="primary-action"
-                disabled={!goodPinEntry || goodSubmitting}
-                onClick={() => void submitEverythingGood(goodPinEntry)}
-              >
-                {goodSubmitting ? 'Saving…' : 'Make fish happy'}
-              </button>
-              <button type="button" className="secondary-action" onClick={() => setGoodModalOpen(false)}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </main>
-  )
-}
-
-function AquariumMoodDebugView({ aquarium }: { aquarium: AquariumData | null }) {
-  const debug = aquarium?.moodDebug
-
-  if (!aquarium || !debug) {
-    return (
-      <section className="screen aquarium-debug-screen">
-        <div className="screen-heading">
-          <p className="eyebrow">Family Aquarium</p>
-          <h1>Fish mood math</h1>
-        </div>
-        <section className="panel">
-          <p>Loading fish mood details...</p>
-        </section>
-      </section>
-    )
-  }
-
-  const finalScore = debug.rules.mood_rank[debug.mood.final]
-  const baseScore = debug.rules.mood_rank[debug.mood.base]
-  const capScore = debug.mood.participation_ceiling ? debug.rules.mood_rank[debug.mood.participation_ceiling] : null
-  const countedRows = debug.counted_completions.map((completion) => ({
-    label: `${completion.chore_name} by ${completion.member_name}`,
-    value: 1,
-    detail: `Completed ${formatTime(completion.completed_at)}`,
-  }))
-  const ignoredRows = debug.ignored_completions.map((completion) => ({
-    label: `${completion.chore_name} by ${completion.member_name}`,
-    value: 0,
-    detail: completion.member_type !== 'child' ? 'Ignored because this was an adult completion.' : 'Ignored because this chore does not feed the aquarium.',
-  }))
-
-  return (
-    <section className="screen aquarium-debug-screen">
-      <div className="screen-heading">
-        <p className="eyebrow">Family Aquarium</p>
-        <h1>Fish mood math</h1>
-      </div>
-
-      <section className="panel aquarium-debug-total">
-        <div>
-          <span>Final mood</span>
-          <strong>{moodText(debug.mood.final)}</strong>
-        </div>
-        <div>
-          <span>Final score</span>
-          <strong>{finalScore}</strong>
-        </div>
-      </section>
-
-      <section className="panel">
-        <h2>Today&apos;s counted chores</h2>
-        <div className="debug-equation">
-          {countedRows.length === 0 && (
-            <div className="debug-equation-row">
-              <span>No fish-feeding child chores today</span>
-              <strong>+0</strong>
-            </div>
-          )}
-          {countedRows.map((row) => (
-            <div key={`${row.label}-${row.detail}`} className="debug-equation-row">
-              <span>
-                {row.label}
-                <small>{row.detail}</small>
-              </span>
-              <strong>+{row.value}</strong>
-            </div>
-          ))}
-          <div className="debug-equation-rule" />
-          <div className="debug-equation-row total">
-            <span>Child fish-feeding chore count</span>
-            <strong>{debug.participation.todayChildCount}</strong>
-          </div>
-          <div className="debug-equation-row">
-            <span>Base mood from chore count</span>
-            <strong>{moodText(debug.mood.base)} ({baseScore})</strong>
-          </div>
-        </div>
-      </section>
-
-      <section className="panel">
-        <h2>Caps and overrides</h2>
-        <div className="debug-equation">
-          <div className="debug-equation-row">
-            <span>
-              Distinct children who helped
-              <small>
-                {debug.participation.todayDistinctChildCount} of {debug.participation.activeChildCount} active children
-              </small>
-            </span>
-            <strong>{debug.mood.participation_ceiling ? `${moodText(debug.mood.participation_ceiling)} (${capScore})` : 'No cap'}</strong>
-          </div>
-          <div className="debug-equation-row">
-            <span>Final mood after caps and overrides</span>
-            <strong>{moodText(debug.mood.final)} ({finalScore})</strong>
-          </div>
-          <div className="debug-equation-row">
-            <span>Everything good override</span>
-            <strong>{debug.overrides.everything_good_active ? `Active until ${formatTime(debug.overrides.everything_good_until ?? '')}` : 'Inactive'}</strong>
-          </div>
-          <div className="debug-equation-row">
-            <span>Panic override</span>
-            <strong>{debug.overrides.panic_active ? `Active, ${debug.overrides.panic_chores_needed} chores needed` : 'Inactive'}</strong>
-          </div>
-        </div>
-      </section>
-
-      <section className="panel">
-        <h2>Time window</h2>
-        <div className="debug-info-grid">
-          <span>Household day</span>
-          <strong>{debug.today.date}</strong>
-          <span>Counting from</span>
-          <strong>{formatCompactDateTime(new Date(`${debug.today.start}Z`))}</strong>
-          <span>Counting until</span>
-          <strong>{formatCompactDateTime(new Date(`${debug.today.end}Z`))}</strong>
-          <span>Last fed</span>
-          <strong>{debug.last_fed_at ? `${debug.hours_since_fed} hours ago` : 'Never'}</strong>
-        </div>
-      </section>
-
-      {ignoredRows.length > 0 && (
-        <section className="panel">
-          <h2>Ignored today</h2>
-          <div className="debug-equation">
-            {ignoredRows.map((row) => (
-              <div key={`${row.label}-${row.detail}`} className="debug-equation-row muted">
-                <span>
-                  {row.label}
-                  <small>{row.detail}</small>
-                </span>
-                <strong>{row.value}</strong>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
-      <section className="panel">
-        <h2>Range</h2>
-        <div className="debug-range-grid">
-          {Object.entries(debug.rules.mood_rank)
-            .sort((left, right) => left[1] - right[1])
-            .map(([mood, score]) => (
-              <span key={mood}>
-                <strong>{score}</strong>
-                {moodText(mood as AquariumData['state']['mood'])}
-              </span>
-            ))}
-        </div>
-      </section>
-    </section>
-  )
-}
-
-function HouseholdDashboard({
-  today,
-  members,
-  notes,
-  history,
-  currentTime,
-  sessionLabel,
-  selectedMember,
-  memberChores,
-  memberBugs,
-  onRecord,
-  onHistory,
-  onBugBox,
-}: {
-  today: TodayState
-  members: Member[]
-  notes: HouseholdNote[]
-  history: Completion[]
-  currentTime: Date
-  sessionLabel: string
-  selectedMember: Member | null
-  memberChores: Chore[]
-  memberBugs: EarnedBug[]
-  onRecord: () => void
-  onHistory: () => void
-  onBugBox: () => void
-}) {
-  const attentionChores = getNeedsAttention(today)
-  const rhythmMessage = getHouseholdRhythmMessage(today)
-  const helpers = getTodayContributions(members, today.completedToday)
-  const selectedMemberName = selectedMember ? displayFamilyMemberPublic(selectedMember) : null
-  const selectedMemberDone = memberChores.filter((chore) => chore.last_completed_at && relativeDate(chore.last_completed_at) === 'today')
-  const selectedMemberOpen = sortChoresForHousehold(memberChores.filter((chore) => chore.is_due === 1 || chore.is_overdue === 1))
-  const recentActivity = getRecentActivity(history, 6)
-
-  return (
-    <section className="screen household-dashboard">
-      <section className="household-header">
-        <div>
-          <p className="eyebrow">{formatCompactDateTime(currentTime)}</p>
-          <h1>Household view</h1>
-          {sessionLabel && <p>{sessionLabel}</p>}
-        </div>
-        <strong>
-          {today.overdue.length} overdue • {today.due.length} due today • {today.completedToday.length} completed today
-        </strong>
-      </section>
-
-      <div className="action-row">
-        <button type="button" className="primary-action" onClick={onRecord}>
-          Record a chore
-        </button>
-        <button type="button" className="secondary-action" onClick={onHistory}>
-          View history
-        </button>
-      </div>
-
-      <section className="panel attention-panel">
-        <h2>Needs attention</h2>
-        <div className="attention-list">
-          {attentionChores.length === 0 && <p className="empty-state">Nothing needs attention right now.</p>}
-          {attentionChores.map((chore) => (
-            <article key={choreKey(chore)} className={`attention-item${chore.is_overdue ? ' urgent' : ''}`}>
-              <span className="avatar-line">
-                <AvatarIcon avatarId={choreAvatarId(chore)} name={choreAvatarName(chore)} size="small" />
-                <strong>{chore.name}</strong>
-              </span>
-              <span>
-                {chore.is_overdue ? 'Overdue' : 'Due today'} • {frequencyLabel(chore.frequency_type)}
-                {chore.responsible_member_name ? ` • ${chore.responsible_member_name}` : ' • household'}
-              </span>
-              {chore.last_completed_at && (
-                <small>Last completed by {chore.last_completed_by ?? 'someone'} {relativeDate(chore.last_completed_at)}</small>
-              )}
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <div className="dashboard-grid">
-        <section className="panel">
-          <h2>Recent activity</h2>
-          <div className="activity-feed">
-            {recentActivity.length === 0 && <p className="empty-state">No recent activity.</p>}
-            {recentActivity.map((completion) => (
-              <article key={completion.id}>
-                <span className="avatar-line">
-                  <AvatarIcon avatarId={completion.member_avatar_id} name={completion.member_name} size="small" />
-                  <strong>{completion.member_name}</strong>
-                </span>
-                <span>completed {completion.chore_name}</span>
-                <small>
-                  {formatTime(completion.completed_at)}
-                  <ActivityDayBadge value={completion.completed_at} />
-                </small>
-              </article>
-            ))}
-          </div>
-          <button type="button" className="secondary-action compact-action" onClick={onHistory}>
-            Full history
-          </button>
-        </section>
-
-        <section className="panel">
-          <h2>Today’s helpers</h2>
-          <div className="helper-list">
-            {helpers.map((helper) => (
-              <span key={helper.id} className="helper-row">
-                <span className="avatar-line">
-                  <AvatarIcon avatarId={helper.avatarId} name={helper.name} size="small" />
-                  <strong>{helper.name}</strong>
-                </span>
-                <strong>{helper.count}</strong>
-              </span>
-            ))}
-          </div>
-        </section>
-      </div>
-
-      <section className="panel bug-teaser">
-        <div>
-          <h2>Bug Box</h2>
-          <p className="empty-state">
-            {selectedMember
-              ? `${selectedMemberName} has ${memberBugs.length} bug${memberBugs.length === 1 ? '' : 's'} hanging out.`
-              : 'Complete chores to catch temporary bugs.'}
-          </p>
-        </div>
-        <div className="bug-teaser-strip">
-          {memberBugs.slice(0, 5).map((bug) => (
-            <BugIcon key={bug.id} bugId={bug.bug_id} size="small" />
-          ))}
-          {memberBugs.length === 0 && bugDefinitions.slice(0, 3).map((bug) => <BugIcon key={bug.id} bugId={bug.id} size="small" />)}
-        </div>
-        <button type="button" className="secondary-action compact-action" onClick={onBugBox}>
-          Open Bug Box
-        </button>
-      </section>
-
-      {selectedMember && (
-        <section className="panel">
-          <h2>Your chores</h2>
-          <div className="your-chore-list">
-            {selectedMemberOpen.length === 0 && selectedMemberDone.length === 0 && (
-              <p className="empty-state">{selectedMemberName} has no chores showing right now.</p>
-            )}
-            {selectedMemberOpen.map((chore) => (
-              <article key={choreKey(chore)} className="your-chore-row attention">
-                <strong>{chore.is_overdue ? '!' : '•'} {chore.name}</strong>
-                <span>{chore.is_overdue ? 'Overdue' : 'Still due'} • {frequencyLabel(chore.frequency_type)}</span>
-              </article>
-            ))}
-            {selectedMemberDone.map((chore) => (
-              <article key={choreKey(chore)} className="your-chore-row done">
-                <strong>✓ {chore.name}</strong>
-                <span>Done today</span>
-              </article>
-            ))}
-          </div>
-        </section>
-      )}
-
-      <section className="panel">
-        <h2>Household rhythm</h2>
-        <div className="rhythm-list">
-          <p>{rhythmMessage}</p>
-        </div>
-      </section>
-
-      <section className="panel">
-        <h2>Household notes</h2>
-        <div className="read-list compact-list">
-          {notes.length === 0 && <p className="empty-state">No active notes.</p>}
-          {notes.slice(0, 3).map((note) => (
-            <article key={note.id} className="read-item">
-              <strong>{noteTypeLabel(note.note_type)}</strong>
-              <span>{note.text}</span>
-            </article>
-          ))}
-        </div>
-      </section>
-    </section>
   )
 }
 
@@ -1898,13 +1083,20 @@ function HistoryView({
   const [range, setRange] = useState<HistoryRange>('7d')
   const [memberFilter, setMemberFilter] = useState('all')
   const [choreFilter, setChoreFilter] = useState('all')
-  const memberOptions = members.map((member) => displayFamilyMemberPublic(member))
+  const memberOptions = [...new Set(
+    members.filter((member) => member.active === 1).map((member) => displayFamilyMemberPublic(member)),
+  )]
   const choreOptions = [...new Set(chores.map((chore) => chore.name).concat(history.map((completion) => completion.chore_name)))].sort()
   const filteredHistory = filterCompletions(history, range, memberFilter, choreFilter)
   const memberCounts = getCompletionCountsByMember(filteredHistory, members)
   const choreCounts = getCompletionCountsByChore(filteredHistory)
   const mostActive = memberCounts.find((member) => member.count > 0)
-  const mostRepeated = choreCounts[0]
+  const childIds = new Set(members.filter((member) => member.active === 1 && member.member_type === 'child').map((member) => member.id))
+  const childCounts = memberCounts.filter((member) => childIds.has(member.id))
+  const lowestChildCount = childCounts.length > 0 ? Math.min(...childCounts.map((member) => member.count)) : null
+  const needsNudge = lowestChildCount === null
+    ? 'No children set up'
+    : childCounts.filter((member) => member.count === lowestChildCount).map((member) => member.name).join(', ')
   const grouped = filteredHistory.reduce<Record<string, Completion[]>>((groups, completion) => {
     const key = new Date(`${completion.completed_at}Z`).toDateString()
     groups[key] = [...(groups[key] ?? []), completion]
@@ -1960,8 +1152,8 @@ function HistoryView({
           <strong>{mostActive ? mostActive.name : 'None yet'}</strong>
         </section>
         <section className="panel metric-card">
-          <span>Most repeated chore</span>
-          <strong>{mostRepeated ? mostRepeated.name : 'None yet'}</strong>
+          <span>May need a nudge</span>
+          <strong>{needsNudge}</strong>
         </section>
       </div>
 
@@ -2010,94 +1202,6 @@ function HistoryView({
   )
 }
 
-function BugBoxView({
-  members,
-  selectedMember,
-  selectedMemberId,
-  canSwitchMembers,
-  bugs,
-  onSelectMember,
-  onExplodeBug,
-}: {
-  members: Member[]
-  selectedMember: Member | null
-  selectedMemberId: number | null
-  canSwitchMembers: boolean
-  bugs: EarnedBug[]
-  onSelectMember: (memberId: number | null) => void
-  onExplodeBug: (earnedBugId: string) => Promise<void> | void
-}) {
-  const visibleBugs = useMemo(() => bugs.slice(0, 30), [bugs])
-  const memberName = selectedMember ? displayFamilyMemberPublic(selectedMember) : null
-  const bugViewModels: ActiveBugViewModel[] = useMemo(
-    () =>
-      visibleBugs.map((bug) => {
-        const definition = getBugDefinition(bug.bug_id)
-        return {
-          earnedBugId: String(bug.id),
-          bugId: bug.bug_id,
-          displayName: definition.displayName,
-          file: definition.file,
-          earnedAt: bug.earned_at,
-          expiresAt: bug.expires_at,
-        }
-      }),
-    [visibleBugs],
-  )
-
-  return (
-    <section className="screen bug-box-screen">
-      <div className="screen-heading">
-        <h1>{memberName ? `${memberName}’s Bug Box` : 'Whose Bug Box?'}</h1>
-      </div>
-
-      {canSwitchMembers && !selectedMemberId && (
-        <div className="button-grid">
-          {members.filter((member) => member.active === 1).map((member) => (
-            <button key={member.id} type="button" className="member-choice" onClick={() => onSelectMember(member.id)}>
-              <AvatarIcon avatarId={member.avatar_id} name={displayFamilyMemberPublic(member)} size="medium" />
-              <span>{displayFamilyMemberPublic(member)}</span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {selectedMemberId && (
-        <>
-          {bugs.length > 30 && <p className="empty-state">Showing newest 30 bugs in physics mode.</p>}
-
-          <BugPhysicsBox bugs={bugViewModels} onExplodeBug={onExplodeBug} />
-
-          <div className="bug-box-toolbar">
-            <div className="bug-box-details">
-              <p className="empty-state">Bugs stay for 3 days after each chore.</p>
-              <strong>{bugs.length} bug{bugs.length === 1 ? '' : 's'} hanging out</strong>
-            </div>
-            {canSwitchMembers && (
-              <button type="button" className="secondary-action compact-action" onClick={() => onSelectMember(null)}>
-                Back to bug boxes
-              </button>
-            )}
-          </div>
-
-          {bugs.length > 0 && (
-            <div className="bug-summary-list" aria-label="Active bug list">
-              {visibleBugs.map((bug) => {
-                const definition = getBugDefinition(bug.bug_id)
-                return (
-                  <span key={bug.id}>
-                    {definition.displayName} · {bugTimeLeft(bug.expires_at)}
-                  </span>
-                )
-              })}
-            </div>
-          )}
-        </>
-      )}
-    </section>
-  )
-}
-
 function HistoryItem({ completion }: { completion: Completion }) {
   return (
     <article className="history-item">
@@ -2120,7 +1224,6 @@ function HistoryItem({ completion }: { completion: Completion }) {
       </div>
       <div className="history-meta">
         <span>{formatTime(completion.completed_at)}</span>
-        <span>{completion.device_label ?? completion.session_mode ?? 'Unknown device'}</span>
       </div>
       {completion.notes && <p className="history-note">{completion.notes}</p>}
     </article>
@@ -2133,6 +1236,7 @@ function AdminView({
   unlocked,
   members,
   chores,
+  history,
   memberDraft,
   choreDraft,
   noteDraft,
@@ -2159,6 +1263,7 @@ function AdminView({
   unlocked: boolean
   members: Member[]
   chores: Chore[]
+  history: Completion[]
   memberDraft: MemberDraft
   choreDraft: ChoreDraft
   noteDraft: NoteDraft
@@ -2180,7 +1285,7 @@ function AdminView({
   onTestModeChange: (enabled: boolean) => void
   onExport: () => void
 }) {
-  const [section, setSection] = useState<'menu' | 'members' | 'chores' | 'notes' | 'aquarium' | 'settings' | 'backup' | 'stories'>('menu')
+  const [section, setSection] = useState<'menu' | 'reports' | 'members' | 'chores' | 'notes' | 'aquarium' | 'settings' | 'backup' | 'stories'>('menu')
   const activeMembers = members.filter((member) => member.active === 1)
 
   function updateChoreAssignmentMode(assignment_mode: AssignmentMode) {
@@ -2238,6 +1343,10 @@ function AdminView({
           <h1>What do you want to manage?</h1>
         </div>
         <div className="setup-tile-grid">
+          <button type="button" onClick={() => setSection('reports')}>
+            <strong>Reports</strong>
+            <span>See who has been helping lately and who may need a nudge.</span>
+          </button>
           <button type="button" onClick={() => setSection('members')}>
             <strong>Family members</strong>
             <span>Add, edit, delete, reorder, and activate people.</span>
@@ -2280,6 +1389,10 @@ function AdminView({
       <button type="button" className="secondary-action setup-back" onClick={() => setSection('menu')}>
         Back to setup
       </button>
+
+      {section === 'reports' && (
+        <HistoryView history={history} members={members} chores={chores} />
+      )}
 
       {section === 'members' && (
         <>
@@ -2791,43 +1904,6 @@ function AdminView({
   )
 }
 
-function getNeedsAttention(today: TodayState) {
-  return sortChoresForHousehold([...today.overdue, ...today.due])
-}
-
-function getRecentActivity(history: Completion[], limit: number) {
-  return [...history]
-    .sort((left, right) => new Date(`${right.completed_at}Z`).getTime() - new Date(`${left.completed_at}Z`).getTime())
-    .slice(0, limit)
-}
-
-function getTodayContributions(members: Member[], completedToday: Completion[]) {
-  const counts = completedToday.reduce<Record<string, number>>((totals, completion) => {
-    totals[completion.member_name] = (totals[completion.member_name] ?? 0) + 1
-    return totals
-  }, {})
-
-  return members
-    .filter((member) => member.active === 1)
-    .map((member) => ({
-      id: member.id,
-      name: displayFamilyMemberPublic(member),
-      avatarId: member.avatar_id,
-      count: counts[displayFamilyMemberPublic(member)] ?? 0,
-    }))
-    .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name))
-}
-
-function getHouseholdRhythmMessage(today: TodayState) {
-  if (today.overdue.length > 0) {
-    return `${today.overdue.length} chore${today.overdue.length === 1 ? '' : 's'} need attention.`
-  }
-
-  if (today.completedToday.length >= 10) return 'Great teamwork today.'
-  if (today.completedToday.length > 0) return 'Chores are getting done.'
-  return 'No chores completed yet today.'
-}
-
 function filterCompletions(history: Completion[], range: HistoryRange, memberName: string, choreName: string) {
   return history
     .filter((completion) => isCompletionInRange(completion, range))
@@ -2952,12 +2028,8 @@ function frequencyLabel(frequency: FrequencyType) {
   return frequency[0].toUpperCase() + frequency.slice(1)
 }
 
-function moodText(mood: AquariumData['state']['mood']) {
-  if (mood === 'very_hungry') return 'Very hungry'
-  return mood[0].toUpperCase() + mood.slice(1)
-}
-
-function setupSectionTitle(section: 'menu' | 'members' | 'chores' | 'notes' | 'aquarium' | 'settings' | 'backup' | 'stories') {
+function setupSectionTitle(section: 'menu' | 'reports' | 'members' | 'chores' | 'notes' | 'aquarium' | 'settings' | 'backup' | 'stories') {
+  if (section === 'reports') return 'Chore reports'
   if (section === 'members') return 'Manage family members'
   if (section === 'chores') return 'Manage chores'
   if (section === 'notes') return 'Manage notes'
@@ -2978,15 +2050,6 @@ function toAquariumConfigDraft(config: AquariumConfigDraft): AquariumConfigDraft
     egg_incubation_minutes: Number(config.egg_incubation_minutes ?? defaultAquariumConfigDraft.egg_incubation_minutes),
     growth_days: Number(config.growth_days ?? defaultAquariumConfigDraft.growth_days),
   }
-}
-
-function parseUtcLikeTimestamp(value: string) {
-  return Date.parse(value.includes('T') ? value : `${value.replace(' ', 'T')}Z`)
-}
-
-function getActiveFishTextUntil(localUntil: string | null, apiUntil: string | null) {
-  if (localUntil && parseUtcLikeTimestamp(localUntil) > Date.now()) return localUntil
-  return apiUntil
 }
 
 function noteTypeLabel(type: NoteType) {
@@ -3018,46 +2081,6 @@ function formatFishTextWindow(member: Member) {
   const startTime = member.fish_text_start_time ?? defaultFishTextStartTime
   const stopTime = member.fish_text_stop_time ?? defaultFishTextStopTime
   return `${startTime}-${stopTime}`
-}
-
-function activityDayLabel(value: string) {
-  const date = new Date(`${value}Z`)
-  const today = startOfLocalDay(new Date())
-  const activityDay = startOfLocalDay(date)
-  const diffDays = Math.round((today.getTime() - activityDay.getTime()) / 86_400_000)
-
-  if (diffDays === 0) return { label: 'Today', kind: 'today' }
-  if (diffDays === 1) return { label: 'Yesterday', kind: 'yesterday' }
-
-  return {
-    label: new Intl.DateTimeFormat(undefined, { weekday: 'long' }).format(date),
-    kind: 'weekday',
-  }
-}
-
-function startOfLocalDay(value: Date) {
-  const date = new Date(value)
-  date.setHours(0, 0, 0, 0)
-  return date
-}
-
-function formatCompactDateTime(value: Date) {
-  return new Intl.DateTimeFormat(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(value)
-}
-
-function bugTimeLeft(expiresAt: string) {
-  const remainingMs = new Date(`${expiresAt}Z`).getTime() - Date.now()
-  if (remainingMs <= 0) return 'expires today'
-
-  const remainingDays = Math.ceil(remainingMs / 86_400_000)
-  if (remainingDays <= 1) return 'expires tomorrow'
-  return `${remainingDays} days left`
 }
 
 function relativeDate(value: string) {
