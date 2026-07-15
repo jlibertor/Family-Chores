@@ -92,63 +92,22 @@ function CreatureDefs({ id, palette }: { id: string; palette: CreaturePalette })
 }
 
 function MoodFace({ mood, x, y, scale = 1, eyeSpacing = 13 }: MoodFaceProps) {
-  const cheerful = mood === 'happy' || mood === 'content'
-  const worried = mood === 'hungry' || mood === 'very_hungry' || mood === 'sad'
-  const crying = mood === 'very_hungry' || mood === 'sad'
-  const pupilY = mood === 'sad' ? 1.3 : mood === 'very_hungry' ? 0.8 : 0
-
-  const leftBrow = worried
-    ? `M ${-eyeSpacing - 6} -10 Q ${-eyeSpacing} -14 ${-eyeSpacing + 6} -9`
-    : `M ${-eyeSpacing - 6} -10 Q ${-eyeSpacing} -13 ${-eyeSpacing + 6} -11`
-  const rightBrow = worried
-    ? `M ${eyeSpacing - 6} -9 Q ${eyeSpacing} -14 ${eyeSpacing + 6} -10`
-    : `M ${eyeSpacing - 6} -11 Q ${eyeSpacing} -13 ${eyeSpacing + 6} -10`
+  const mouthPath = {
+    happy: 'M -7 11 Q 0 20 7 11',
+    content: 'M -6 12 Q 0 17 6 12',
+    peckish: 'M -6 15 Q 0 16 6 15',
+    hungry: 'M -6 20 Q 0 15 6 20',
+    very_hungry: 'M -7 22 Q 0 14 7 22',
+    sad: 'M -7 22 Q 0 14 7 22',
+  }[mood]
 
   return (
     <g transform={`translate(${x} ${y}) scale(${scale})`}>
-      <ellipse cx={-eyeSpacing - 8} cy="8" rx="6.5" ry="3.4" fill="#fb7185" opacity={cheerful ? 0.42 : 0.2} />
-      <ellipse cx={eyeSpacing + 8} cy="8" rx="6.5" ry="3.4" fill="#fb7185" opacity={cheerful ? 0.42 : 0.2} />
-
-      <path d={leftBrow} fill="none" stroke={softOutline} strokeLinecap="round" strokeWidth="2.8" />
-      <path d={rightBrow} fill="none" stroke={softOutline} strokeLinecap="round" strokeWidth="2.8" />
-
-      <g className="creature-eyes">
-        <ellipse cx={-eyeSpacing} cy="0" rx="7.8" ry="8.7" fill="#fffdf7" stroke={outline} strokeWidth="2.5" />
-        <ellipse cx={eyeSpacing} cy="0" rx="7.8" ry="8.7" fill="#fffdf7" stroke={outline} strokeWidth="2.5" />
-        <ellipse cx={-eyeSpacing + 1} cy={1 + pupilY} rx="3.8" ry="4.8" fill="#203444" />
-        <ellipse cx={eyeSpacing + 1} cy={1 + pupilY} rx="3.8" ry="4.8" fill="#203444" />
-        <circle cx={-eyeSpacing - 0.3} cy={-1 + pupilY} r="1.45" fill="white" />
-        <circle cx={eyeSpacing - 0.3} cy={-1 + pupilY} r="1.45" fill="white" />
+      <g className="creature-eyes" fill={outline}>
+        <circle cx={-eyeSpacing} cy="0" r="4.1" />
+        <circle cx={eyeSpacing} cy="0" r="4.1" />
       </g>
-
-      {crying && (
-        <g className="creature-tears">
-          <ellipse cx={-eyeSpacing - 1} cy="12" rx="2.8" ry="4.7" fill="#7dd3fc" stroke="#e0f2fe" strokeWidth="0.8" />
-          <ellipse cx={eyeSpacing + 1} cy="12" rx="2.8" ry="4.7" fill="#7dd3fc" stroke="#e0f2fe" strokeWidth="0.8" />
-        </g>
-      )}
-
-      {mood === 'happy' && (
-        <g>
-          <path d="M -10 15 Q 0 27 10 15 Q 8 32 0 33 Q -8 32 -10 15 Z" fill="#3b2530" stroke={outline} strokeLinejoin="round" strokeWidth="2.8" />
-          <path d="M -5 27 Q 0 24 5 27 Q 3 31 0 31 Q -3 31 -5 27 Z" fill="#fb7185" />
-        </g>
-      )}
-      {mood === 'content' && (
-        <path d="M -10 17 Q 0 26 10 17" fill="none" stroke={outline} strokeLinecap="round" strokeWidth="3.2" />
-      )}
-      {mood === 'peckish' && (
-        <path d="M -8 20 Q 0 18 8 20" fill="none" stroke={outline} strokeLinecap="round" strokeWidth="3.2" />
-      )}
-      {mood === 'hungry' && (
-        <ellipse cx="0" cy="21" rx="5.2" ry="4.2" fill="#fff1f2" stroke={outline} strokeWidth="2.8" />
-      )}
-      {mood === 'very_hungry' && (
-        <path d="M -10 25 Q 0 14 10 25" fill="none" stroke={outline} strokeLinecap="round" strokeWidth="3.4" />
-      )}
-      {mood === 'sad' && (
-        <path d="M -11 27 Q 0 13 11 27" fill="none" stroke={outline} strokeLinecap="round" strokeWidth="3.6" />
-      )}
+      <path d={mouthPath} fill="none" stroke={outline} strokeLinecap="round" strokeWidth="3.4" />
     </g>
   )
 }
